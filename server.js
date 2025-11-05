@@ -207,90 +207,96 @@ io.use((socket, next) => {
 // ======================
 //  Conexión de WebSocket
 // ======================
-io.on("connection", (socket) => {
-  socket.on("newBid", async (bidData) => {
-    console.log("📩 NUEVA PUJA RECIBIDA:", bidData);
-    try {
-      const { token, id_auctions, bid_amount } = bidData;
-      if (!token) return socket.emit("errorBid", { message: "Token requerido" });
+  io.on("connection", (socket) => {
+    socket.on("newBid", async (bidData) => {
+      console.log("📩 NUEVA PUJA RECIBIDA:", bidData);
 
-      let decoded;
-      try { decoded = jwt.verify(token, secret); }
-      catch { return socket.emit("errorBid", { message: "Token inválido o expirado" }); }
+      try {
+        const { token, id_auctions, bid_amount } = bidData;
+        if (!token) return socket.emit("errorBid", { message: "Token requerido" });
 
-      const userId   = decoded.id;
-      const auctionId = Number(id_auctions);
-      const amount    = Number(bid_amount);
+        // ✅ Verificar token JWT
+        let decoded;
+        try { decoded = jwt.verify(token, secret); }
+        catch { return socket.emit("errorBid", { message: "Token inválido o expirado" }); }
 
-      if (!auctionId || !Number.isFinite(amount) || amount <= 0)
-        return socket.emit("errorBid", { message: "Datos de puja inválidos." });
+        const userId = decoded.id;
+        const auctionId = Number(id_auctions);
+        const amount = Number(bid_amount);
 
-      // ▶ Info de la subasta
-      const [auctionRows] = await db.query(
-        `SELECT base_price, end_time, status FROM auctions WHERE id_auctions = ?`,
-        [auctionId]
-      );
-      if (auctionRows.length === 0)
-        return socket.emit("errorBid", { message: "Subasta no encontrada." });
+        if (!auctionId || isNaN(amount) || amount <= 0) {
+          return socket.emit("errorBid", { message: "Monto inválido." });
+        }
 
-      const basePrice = Number(auctionRows[0].base_price);
-      if (isNaN(basePrice) || basePrice <= 0) 
-      {
-      console.warn(`⚠️ Precio base inválido para subasta #${auctionId}:`, auctionRows[0].base_price);
-      return socket.emit("errorBid", { message: "Error interno: precio base no válido." });
-      }
-      const endTime   = new Date(auctionRows[0].end_time);
+        // ✅ Obtener datos de la subasta
+        const [auctionRows] = await db.query(
+          `SELECT base_price, end_time, status FROM auctions WHERE id_auctions = ?`,
+          [auctionId]
+        );
+        if (!auctionRows.length)
+          return socket.emit("errorBid", { message: "Subasta no encontrada." });
 
-      // ▶ No permitir pujar si terminó o fue cerrada
-      if (auctionRows[0].status === "ended" || new Date() >= endTime)
-        return socket.emit("errorBid", { message: "La subasta ya ha finalizado." });
+        const basePrice = parseFloat(auctionRows[0].base_price);
+        const endTime = new Date(auctionRows[0].end_time);
 
-      // ▶ Puja más alta actual
-      const [maxRows] = await db.query(
-        `SELECT bid_amount FROM bids WHERE id_auctions = ? ORDER BY bid_amount DESC LIMIT 1`,
-        [auctionId]
-      );
-      const highestBid = maxRows.length ? Number(maxRows[0].bid_amount) : 0;
+        if (isNaN(basePrice) || basePrice <= 0) {
+          console.warn(`⚠️ Precio base inválido para subasta #${auctionId}:`, auctionRows[0].base_price);
+          return socket.emit("errorBid", { message: "Error interno: precio base no válido." });
+        }
 
-      // ✅ UMBRAL CORRECTO: máximo entre precio base y puja más alta
-      const threshold = Math.max(basePrice, highestBid);
+        // ❌ Si ya finalizó
+        if (auctionRows[0].status === "ended" || new Date() >= endTime) {
+          return socket.emit("errorBid", { message: "La subasta ya ha finalizado." });
+        }
 
-      if (amount <= threshold) {
-        return socket.emit("errorBid", {
-          message: `Tu puja debe ser mayor a $${threshold.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+        // ✅ Buscar puja más alta actual
+        const [maxRows] = await db.query(
+          `SELECT bid_amount FROM bids WHERE id_auctions = ? ORDER BY bid_amount DESC LIMIT 1`,
+          [auctionId]
+        );
+        const highestBid = maxRows.length ? parseFloat(maxRows[0].bid_amount) : 0;
+
+        // 🧩 Definir umbral correcto (mayor entre base y puja más alta)
+        const threshold = Math.max(basePrice, highestBid);
+
+        // ❌ Rechazar si es menor o igual
+        if (amount <= threshold) {
+          return socket.emit("errorBid", {
+            message: `La puja mínima debe ser mayor a $${threshold.toFixed(2)}`,
+          });
+        }
+
+        // ✅ Insertar puja
+        await db.query(
+          "INSERT INTO bids (id_auctions, id_users, bid_amount) VALUES (?, ?, ?)",
+          [auctionId, userId, amount]
+        );
+
+        console.log(`✅ Puja registrada: ${decoded.username} -> #${auctionId} $${amount}`);
+
+        // ✅ Emitir actualización
+        const [highest] = await db.query(
+          `SELECT b.bid_amount, u.username
+            FROM bids b
+            JOIN users u ON u.id_users = b.id_users
+            WHERE b.id_auctions = ?
+            ORDER BY b.bid_amount DESC, b.bid_time ASC
+            LIMIT 1`,
+          [auctionId]
+        );
+
+        io.emit("updateBids", {
+          id_auctions: auctionId,
+          highestBid: highest[0]?.bid_amount ?? amount,
+          highestBidUser: highest[0]?.username ?? decoded.username,
         });
+      } catch (err) {
+        console.error("❌ Error al registrar la puja:", err);
+        socket.emit("errorBid", { message: "Error interno al registrar la puja" });
       }
-
-      // ▶ Insertar puja
-      await db.query(
-        `INSERT INTO bids (id_auctions, id_users, bid_amount) VALUES (?, ?, ?)`,
-        [auctionId, userId, amount]
-      );
-
-      console.log(`✅ Puja registrada: ${decoded.username} -> #${auctionId} $${amount}`);
-
-      // ▶ Recalcular y emitir actualización
-      const [highest] = await db.query(
-        `SELECT b.bid_amount, u.username
-           FROM bids b
-           JOIN users u ON u.id_users = b.id_users
-          WHERE b.id_auctions = ?
-          ORDER BY b.bid_amount DESC, b.bid_time ASC
-          LIMIT 1`,
-        [auctionId]
-      );
-
-      io.emit("updateBids", {
-        id_auctions: auctionId,
-        highestBid: highest[0]?.bid_amount ?? amount,
-        highestBidUser: highest[0]?.username ?? decoded.username,
-      });
-    } catch (err) {
-      console.error("❌ Error al registrar la puja:", err);
-      socket.emit("errorBid", { message: "Error interno al registrar la puja" });
-    }
+    });
   });
-});
+
 
 // ======================
 //  Iniciar servidor
