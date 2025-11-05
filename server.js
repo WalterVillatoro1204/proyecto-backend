@@ -23,73 +23,71 @@ const secret = process.env.JWT_SECRET;
 // ======================
 async function checkEndedAuctions() {
   try {
-    console.log("⏱️ Ejecutando verificación de subastas...");
+    // Diagnóstico de zona horaria
+    const [tz] = await db.query("SELECT NOW() AS mysql_now, UTC_TIMESTAMP() AS mysql_utc");
+    console.log("🕒 MySQL NOW:", tz[0].mysql_now, "| MySQL UTC:", tz[0].mysql_utc, "| Node:", new Date().toISOString());
 
-    // 1️⃣ Obtener subastas que ya terminaron y siguen activas
-    const [endedAuctions] = await db.query(`
-      SELECT a.id_auctions, a.title, a.end_time
-      FROM auctions a
-      WHERE a.end_time <= NOW()
-      AND a.status = 'active'
+    // Subastas vencidas y aún activas
+    const [rows] = await db.query(`
+      SELECT a.id_auctions, a.title
+        FROM auctions a
+       WHERE a.end_time <= NOW()
+         AND a.status = 'active'
     `);
 
-    const [rows] = await db.query("SELECT NOW() AS hora_mysql, UTC_TIMESTAMP() AS hora_utc");
-    console.log("🕒 Hora MySQL local:", rows[0].hora_mysql);
-    console.log("🕒 Hora UTC:", rows[0].hora_utc);
+    if (!rows.length) return;
 
-    if (endedAuctions.length === 0) {
-      console.log("🟢 No hay subastas finalizadas por cerrar.");
-      return;
-    }
+    for (const a of rows) {
+      const auctionId = a.id_auctions;
 
-    console.log(`⚠️ Se encontraron ${endedAuctions.length} subasta(s) finalizada(s).`);
-
-    for (const auction of endedAuctions) {
-      const auctionId = auction.id_auctions;
-
-      // 2️⃣ Obtener la puja más alta
+      // Ganador (si lo hay)
       const [winner] = await db.query(
         `SELECT b.id_users, b.bid_amount, u.username
-         FROM bids b
-         JOIN users u ON b.id_users = u.id_users
-         WHERE b.id_auctions = ?
-         ORDER BY b.bid_amount DESC, b.bid_time ASC
-         LIMIT 1`,
+           FROM bids b
+           JOIN users u ON u.id_users=b.id_users
+          WHERE b.id_auctions=?
+          ORDER BY b.bid_amount DESC, b.bid_time ASC
+          LIMIT 1`,
         [auctionId]
       );
 
-      // 3️⃣ Actualizar estado de la subasta
-      await db.query(`UPDATE auctions SET status = 'ended' WHERE id_auctions = ?`, [auctionId]);
+      // 🔒 Cerrar subasta
+      await db.query(`UPDATE auctions SET status='ended' WHERE id_auctions=?`, [auctionId]);
 
-      // 4️⃣ Registrar notificación según haya o no ganador
-      if (winner.length > 0) {
-        const userId = winner[0].id_users;
-        const amount = winner[0].bid_amount;
-        const username = winner[0].username;
-
+      // Notificación única (evitar duplicados)
+      if (winner.length) {
+        const { id_users, bid_amount, username } = winner[0];
         await db.query(
           `INSERT INTO notifications (id_auction, id_user, message)
-           VALUES (?, ?, ?)`,
-          [auctionId, userId, `🏆 🎉 ¡Felicidades ${username}! Ganaste la subasta #${auctionId} con una puja de $${amount.toLocaleString("en-US")}`]
+             SELECT ?, ?, ? FROM DUAL
+              WHERE NOT EXISTS (
+                SELECT 1 FROM notifications WHERE id_auction=? AND id_user=? AND message LIKE '🏆 %'
+              )`,
+          [auctionId, id_users, `🏆 🎉 ¡Felicidades ${username}! Ganaste la subasta #${auctionId} con una puja de $${bid_amount.toLocaleString("en-US")}`, auctionId, id_users]
         );
-
-        console.log(`✅ Subasta #${auctionId} finalizada. Ganador: ${username} con $${amount}`);
       } else {
         await db.query(
           `INSERT INTO notifications (id_auction, id_user, message)
-           VALUES (?, NULL, ?)`,
-          [auctionId, `😢 Nadie ofertó en la subasta #${auctionId}.`]
+             SELECT ?, NULL, ? FROM DUAL
+              WHERE NOT EXISTS (
+                SELECT 1 FROM notifications WHERE id_auction=? AND message LIKE '😢 %'
+              )`,
+          [auctionId, `😢 Nadie ofertó en la subasta #${auctionId}.`, auctionId]
         );
-        console.log(`ℹ️ Subasta #${auctionId} finalizada sin pujas.`);
       }
 
-      // 5️⃣ Emitir evento en tiempo real a todos los clientes conectados
+      // Broadcast al frontend
       io.emit("auctionEnded", { id_auctions: auctionId });
+      console.log(`🔔 Subasta #${auctionId} cerrada y notificada.`);
     }
   } catch (err) {
     console.error("❌ Error en checkEndedAuctions:", err.message);
   }
 }
+
+// ⏰ Cada 10 segundos
+cron.schedule("*/10 * * * * *", checkEndedAuctions);
+
 
 
 // ======================
@@ -169,110 +167,82 @@ io.use((socket, next) => {
 //  Conexión de WebSocket
 // ======================
 io.on("connection", (socket) => {
-  console.log("🟢 Cliente conectado:", socket.id, "| Usuario:", socket.username);
-
   socket.on("newBid", async (bidData) => {
     console.log("📩 NUEVA PUJA RECIBIDA:", bidData);
     try {
       const { token, id_auctions, bid_amount } = bidData;
-
-      if (!token) {
-        socket.emit("errorBid", { message: "Token requerido" });
-        return;
-      }
+      if (!token) return socket.emit("errorBid", { message: "Token requerido" });
 
       let decoded;
-      try {
-        decoded = jwt.verify(token, secret);
-      } catch {
-        socket.emit("errorBid", { message: "Token inválido o expirado" });
-        return;
-      }
+      try { decoded = jwt.verify(token, secret); }
+      catch { return socket.emit("errorBid", { message: "Token inválido o expirado" }); }
 
-      const userId = decoded.id;
-      const auctionId = parseInt(id_auctions);
-      const amount = parseFloat(bid_amount);
+      const userId   = decoded.id;
+      const auctionId = Number(id_auctions);
+      const amount    = Number(bid_amount);
 
-      if (!auctionId || isNaN(amount) || amount <= 0) {
-        socket.emit("errorBid", { message: "Datos de puja inválidos." });
-        return;
-      }
+      if (!auctionId || !Number.isFinite(amount) || amount <= 0)
+        return socket.emit("errorBid", { message: "Datos de puja inválidos." });
 
-      // 🔹 Obtener información de la subasta
-      const [auctionData] = await db.query(
+      // ▶ Info de la subasta
+      const [auctionRows] = await db.query(
         `SELECT base_price, end_time, status FROM auctions WHERE id_auctions = ?`,
         [auctionId]
       );
+      if (auctionRows.length === 0)
+        return socket.emit("errorBid", { message: "Subasta no encontrada." });
 
-      if (auctionData.length === 0) {
-        socket.emit("errorBid", { message: "Subasta no encontrada." });
-        return;
-      }
+      const basePrice = Number(auctionRows[0].base_price);
+      const endTime   = new Date(auctionRows[0].end_time);
 
-      const basePrice = parseFloat(auctionData[0].base_price);
-      const endTime = new Date(auctionData[0].end_time);
-      const now = new Date();
+      // ▶ No permitir pujar si terminó o fue cerrada
+      if (auctionRows[0].status === "ended" || new Date() >= endTime)
+        return socket.emit("errorBid", { message: "La subasta ya ha finalizado." });
 
-      // 🚫 Si la subasta ya terminó
-      if (now >= endTime || auctionData[0].status === "ended") {
-        socket.emit("errorBid", { message: "La subasta ya ha finalizado." });
-        return;
-      }
-
-      // 🔹 Obtener la puja más alta actual
-      const [currentHighest] = await db.query(
+      // ▶ Puja más alta actual
+      const [maxRows] = await db.query(
         `SELECT bid_amount FROM bids WHERE id_auctions = ? ORDER BY bid_amount DESC LIMIT 1`,
         [auctionId]
       );
+      const highestBid = maxRows.length ? Number(maxRows[0].bid_amount) : 0;
 
-      const currentBid =
-        currentHighest.length > 0
-          ? parseFloat(currentHighest[0].bid_amount)
-          : basePrice; // 🟢 Si no hay pujas, se usa el precio base como referencia mínima
+      // ✅ UMBRAL CORRECTO: máximo entre precio base y puja más alta
+      const threshold = Math.max(basePrice, highestBid);
 
-      // 🚫 Validar monto: debe ser estrictamente mayor al actual o al base
-      if (amount <= currentBid) {
-        socket.emit("errorBid", {
-          message: `Tu puja debe ser mayor a $${currentBid.toFixed(2)}`,
+      if (amount <= threshold) {
+        return socket.emit("errorBid", {
+          message: `Tu puja debe ser mayor a $${threshold.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
         });
-        return;
       }
 
-      // ✅ Registrar la puja
+      // ▶ Insertar puja
       await db.query(
-        "INSERT INTO bids (id_auctions, id_users, bid_amount) VALUES (?, ?, ?)",
+        `INSERT INTO bids (id_auctions, id_users, bid_amount) VALUES (?, ?, ?)`,
         [auctionId, userId, amount]
       );
 
-      console.log(`✅ Puja registrada: usuario ${decoded.username}, subasta ${auctionId}, $${amount}`);
+      console.log(`✅ Puja registrada: ${decoded.username} -> #${auctionId} $${amount}`);
 
-      // 🔹 Obtener la nueva puja más alta
+      // ▶ Recalcular y emitir actualización
       const [highest] = await db.query(
-        `SELECT b.bid_amount, u.username 
-        FROM bids b
-        JOIN users u ON b.id_users = u.id_users
-        WHERE b.id_auctions = ?
-        ORDER BY b.bid_amount DESC, b.bid_time ASC
-        LIMIT 1`,
+        `SELECT b.bid_amount, u.username
+           FROM bids b
+           JOIN users u ON u.id_users = b.id_users
+          WHERE b.id_auctions = ?
+          ORDER BY b.bid_amount DESC, b.bid_time ASC
+          LIMIT 1`,
         [auctionId]
       );
 
-      const newHighest = {
+      io.emit("updateBids", {
         id_auctions: auctionId,
-        highestBid: highest[0]?.bid_amount || amount,
-        highestBidUser: highest[0]?.username || decoded.username,
-      };
-
-      io.emit("updateBids", newHighest);
-    } catch (error) {
-      console.error("❌ Error al registrar la puja:", error);
+        highestBid: highest[0]?.bid_amount ?? amount,
+        highestBidUser: highest[0]?.username ?? decoded.username,
+      });
+    } catch (err) {
+      console.error("❌ Error al registrar la puja:", err);
       socket.emit("errorBid", { message: "Error interno al registrar la puja" });
     }
-  });
-
-
-  socket.on("disconnect", () => {
-    console.log("🔴 Cliente desconectado:", socket.id);
   });
 });
 
