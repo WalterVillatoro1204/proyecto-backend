@@ -88,25 +88,37 @@ router.get("/history", verifyToken, async (req, res) => {
         a.model,
         a.years,
         a.image_data,
-        MAX(b.bid_amount) AS bid_amount, -- 🔹 Solo la puja más alta del usuario
+        MAX(b.bid_amount) AS bid_amount,
         a.start_time,
         a.end_time,
+        a.status,
         CASE
+          WHEN a.status = 'ended' THEN 'Finalizada'
           WHEN NOW() < a.end_time THEN 'Activa'
           ELSE 'Finalizada'
-        END AS status
+        END AS status_text
       FROM bids b
       JOIN auctions a ON a.id_auctions = b.id_auctions
       WHERE b.id_users = ?
       GROUP BY 
         a.id_auctions, a.title, a.brand, a.model, a.years, 
-        a.image_data, a.start_time, a.end_time
+        a.image_data, a.start_time, a.end_time, a.status
       ORDER BY a.end_time DESC;
       `,
       [userId]
     );
 
-    return res.status(200).json(rows);
+    // ✅ CLAVE: Convertir image_data (Buffer) a base64
+    const auctionsWithImages = rows.map(row => ({
+      ...row,
+      image_data: row.image_data 
+        ? `data:image/jpeg;base64,${row.image_data.toString("base64")}`
+        : null
+    }));
+
+    console.log(`📊 Historial solicitado por usuario ${userId}: ${auctionsWithImages.length} subastas`);
+
+    return res.status(200).json(auctionsWithImages);
   } catch (err) {
     console.error("❌ Error al obtener historial:", err.message);
     return res.status(500).json({ message: "Error al obtener historial de subastas" });
