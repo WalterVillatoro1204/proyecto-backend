@@ -40,7 +40,7 @@ async function checkEndedAuctions() {
     const [rows] = await db.query(`
       SELECT a.id_auctions, a.title
       FROM auctions a
-      WHERE a.end_time <= NOW()
+      WHERE a.end_time <= (NOW() - INTERVAL 3 SECOND)
       AND a.status = 'active'
     `);
 
@@ -129,7 +129,7 @@ async function checkEndedAuctions() {
 }
 
 // ⏰ Cada 10 segundos
-cron.schedule("*/10 * * * * *", checkEndedAuctions);
+cron.schedule("*/0.5 * * * * *", checkEndedAuctions);
 
 // ======================
 //  Configuración base
@@ -234,6 +234,11 @@ io.on("connection", (socket) => {
         return socket.emit("errorBid", { message: "Subasta no encontrada." });
 
       const basePrice = Number(auctionRows[0].base_price);
+      if (isNaN(basePrice) || basePrice <= 0) 
+      {
+      console.warn(`⚠️ Precio base inválido para subasta #${auctionId}:`, auctionRows[0].base_price);
+      return socket.emit("errorBid", { message: "Error interno: precio base no válido." });
+      }
       const endTime   = new Date(auctionRows[0].end_time);
 
       // ▶ No permitir pujar si terminó o fue cerrada
@@ -302,23 +307,5 @@ server.listen(PORT, async () => {
 
   // Iniciar cron job DESPUÉS de que el servidor esté corriendo
   console.log("⏰ Iniciando cron job...");
-  cron.schedule("*/10 * * * * *", checkEndedAuctions);
-});
-
-// ======================
-//  Iniciar servidor
-// ======================
-server.listen(PORT, async () => {
-  console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
-  
-  try {
-    const [rows] = await db.query("SELECT NOW() AS hora_servidor");
-    console.log("🕒 Hora actual en MySQL:", rows[0].hora_servidor);
-  } catch (err) {
-    console.error("❌ Error al conectar con la DB:", err.message);
-  }
-
-  // Iniciar cron job DESPUÉS de que el servidor esté corriendo
-  console.log("⏰ Iniciando cron job...");
-  cron.schedule("*/10 * * * * *", checkEndedAuctions);
+  cron.schedule("*/0.5 * * * * *", checkEndedAuctions);
 });
