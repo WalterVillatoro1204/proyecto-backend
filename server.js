@@ -18,38 +18,47 @@ const server = http.createServer(app);
 const PORT = process.env.PORT || 8080;
 const secret = process.env.JWT_SECRET;
 
-// ======================================================
-// 🔄 FUNCIÓN: Verificar subastas finalizadas
-// ======================================================
+/* ======================================================
+🌎 AJUSTE DE ZONA HORARIA
+====================================================== */
+async function setTimezone() {
+  try {
+    await db.query("SET time_zone = '-06:00'");
+    console.log("🕓 Zona horaria MySQL ajustada a UTC-6 (Guatemala)");
+  } catch (err) {
+    console.warn("⚠️ No se pudo fijar zona horaria:", err.message);
+  }
+}
+
+/* ======================================================
+🔄 FUNCIÓN: Verificar subastas finalizadas
+====================================================== */
 async function checkEndedAuctions() {
   try {
     const [tz] = await db.query(
       "SELECT NOW() AS mysql_now, UTC_TIMESTAMP() AS mysql_utc"
     );
     console.log(
-      "🕒 MySQL NOW:",
-      tz[0].mysql_now,
-      "| MySQL UTC:",
-      tz[0].mysql_utc,
-      "| Node:",
-      new Date().toISOString()
+      "🕒 MySQL NOW:", tz[0].mysql_now,
+      "| UTC:", tz[0].mysql_utc,
+      "| Node local:", new Date().toLocaleString("es-GT", { timeZone: "America/Guatemala" })
     );
 
-    // ✅ Buscar subastas activas que ya terminaron
+    // 🧩 Buscar subastas activas con fin vencido (1 s de tolerancia)
     const [rows] = await db.query(`
       SELECT a.id_auctions, a.title
       FROM auctions a
-      WHERE a.end_time <= NOW()
-      AND a.status = 'active'
+      WHERE a.status = 'active'
+        AND a.end_time <= (NOW() - INTERVAL 1 SECOND)
     `);
 
     if (!rows.length) return;
 
     for (const auction of rows) {
-      const auctionId = auction.id_auctions;
-      console.log(`⚙️ Procesando subasta finalizada #${auctionId} (${auction.title})...`);
+      const { id_auctions, title } = auction;
+      console.log(`⚙️ Procesando subasta vencida #${id_auctions} (${title})...`);
 
-      // 🥇 Buscar la puja más alta
+      // 🥇 Obtener puja más alta
       const [winner] = await db.query(
         `SELECT b.id_users, b.bid_amount, u.username
          FROM bids b
@@ -57,18 +66,19 @@ async function checkEndedAuctions() {
          WHERE b.id_auctions = ?
          ORDER BY b.bid_amount DESC, b.bid_time ASC
          LIMIT 1`,
-        [auctionId]
+        [id_auctions]
       );
 
-      // 🔒 Cerrar la subasta
+      // 🔒 Cerrar subasta
       await db.query(
-        `UPDATE auctions SET status = 'ended' WHERE id_auctions = ?`,
-        [auctionId]
+        "UPDATE auctions SET status = 'ended' WHERE id_auctions = ?",
+        [id_auctions]
       );
 
-      // 🏆 Si hay ganador
+      // 📨 Crear notificación y emitir
       if (winner.length > 0) {
         const { id_users, bid_amount, username } = winner[0];
+        const message = `🏆 🎉 ¡Felicidades ${username}! Ganaste la subasta #${id_auctions} con una puja de $${bid_amount.toFixed(2)}.`;
 
         await db.query(
           `INSERT INTO notifications (id_auction, id_user, message)
@@ -78,43 +88,24 @@ async function checkEndedAuctions() {
              SELECT 1 FROM notifications
              WHERE id_auction = ? AND id_user = ? AND message LIKE '🏆 %'
            )`,
-          [
-            auctionId,
-            id_users,
-            `🏆 🎉 ¡Felicidades ${username}! Ganaste la subasta #${auctionId} con una puja de $${bid_amount.toLocaleString(
-              "en-US"
-            )}.`,
-            auctionId,
-            id_users,
-          ]
+          [id_auctions, id_users, message, id_auctions, id_users]
         );
 
-        io.emit("auctionEnded", {
-          id_auctions: auctionId,
-          winner: username,
-          bid_amount,
-        });
-
-        console.log(`✅ Subasta #${auctionId} finalizada. Ganador: ${username} ($${bid_amount})`);
+        io.emit("auctionEnded", { id_auctions, winner: username, bid_amount });
+        console.log(`🏁 Subasta #${id_auctions} finalizada. Ganador: ${username} ($${bid_amount})`);
       } else {
-        // 😢 Sin pujas
+        const msg = `😢 Nadie ofertó en la subasta #${id_auctions}.`;
         await db.query(
           `INSERT INTO notifications (id_auction, id_user, message)
            SELECT ?, NULL, ?
            FROM DUAL
            WHERE NOT EXISTS (
-             SELECT 1 FROM notifications
-             WHERE id_auction = ? AND message LIKE '😢 %'
+             SELECT 1 FROM notifications WHERE id_auction = ? AND message LIKE '😢 %'
            )`,
-          [
-            auctionId,
-            `😢 Nadie ofertó en la subasta #${auctionId}.`,
-            auctionId,
-          ]
+          [id_auctions, msg, id_auctions]
         );
-
-        io.emit("auctionEnded", { id_auctions: auctionId, winner: null });
-        console.log(`🚫 Subasta #${auctionId} cerrada sin pujas.`);
+        io.emit("auctionEnded", { id_auctions, winner: null });
+        console.log(`🚫 Subasta #${id_auctions} cerrada sin pujas.`);
       }
     }
   } catch (err) {
@@ -122,12 +113,9 @@ async function checkEndedAuctions() {
   }
 }
 
-// Ejecutar cada 10 segundos
-cron.schedule("*/10 * * * * *", checkEndedAuctions);
-
-// ======================================================
-// ⚙️ CONFIGURACIÓN BASE
-// ======================================================
+/* ======================================================
+⚙️ CONFIGURACIÓN BASE
+====================================================== */
 app.use(express.json());
 app.use(cors({
   origin: [
@@ -146,36 +134,24 @@ const io = new Server(server, {
   }
 });
 
-// ======================================================
-// 🧩 RUTAS API
-// ======================================================
+/* ======================================================
+🧩 RUTAS API
+====================================================== */
 app.use("/api/users", userRoutes);
 app.use("/api/auctions", auctionRoutes(io));
 app.use("/api/bids", bidRoutes);
 app.use("/api/notifications", notificationRoutes);
 
-// ======================================================
-// 🩺 HEALTH CHECK
-// ======================================================
+/* ======================================================
+🩺 HEALTH CHECK
+====================================================== */
 app.get("/health", (req, res) => {
   res.status(200).json({ status: "ok" });
 });
 
-// ======================================================
-// 🧠 VERIFICAR CONEXIÓN A BD
-// ======================================================
-app.get("/", async (req, res) => {
-  try {
-    const [rows] = await db.query("SELECT NOW() AS time");
-    return res.status(200).json({ ok: true, db_time: rows[0].time });
-  } catch (err) {
-    return res.status(500).json({ ok: false, error: err.message });
-  }
-});
-
-// ======================================================
-// 🔐 SOCKET.IO AUTH
-// ======================================================
+/* ======================================================
+🔐 SOCKET.IO AUTH
+====================================================== */
 io.use((socket, next) => {
   try {
     const token = socket.handshake.auth?.token;
@@ -198,24 +174,18 @@ io.use((socket, next) => {
   }
 });
 
-// ======================================================
-// 💬 EVENTOS DE PUJA (Socket)
-// ======================================================
+/* ======================================================
+💬 EVENTOS DE PUJA (Socket)
+====================================================== */
 io.on("connection", (socket) => {
   socket.on("newBid", async (bidData) => {
-    console.log("📩 NUEVA PUJA RECIBIDA:", bidData);
-
     try {
       const { token, id_auctions, bid_amount } = bidData;
-      if (!token) return socket.emit("errorBid", { message: "Token requerido" });
+      if (!token) return socket.emit("errorBid", { message: "Token requerido." });
 
-      // Verificar token
       let decoded;
-      try {
-        decoded = jwt.verify(token, secret);
-      } catch {
-        return socket.emit("errorBid", { message: "Token inválido o expirado" });
-      }
+      try { decoded = jwt.verify(token, secret); }
+      catch { return socket.emit("errorBid", { message: "Token inválido o expirado." }); }
 
       const userId = decoded.id;
       const auctionId = Number(id_auctions);
@@ -224,36 +194,40 @@ io.on("connection", (socket) => {
       if (!auctionId || isNaN(amount) || amount <= 0)
         return socket.emit("errorBid", { message: "Monto inválido." });
 
-      // Datos de la subasta
+      // ▶ Obtener datos de la subasta
       const [auctionRows] = await db.query(
-        `SELECT base_price, end_time, status FROM auctions WHERE id_auctions = ?`,
+        "SELECT base_price, end_time, status FROM auctions WHERE id_auctions = ?",
         [auctionId]
       );
       if (!auctionRows.length)
         return socket.emit("errorBid", { message: "Subasta no encontrada." });
 
-      const basePrice = parseFloat(auctionRows[0].base_price);
-      const endTime = new Date(auctionRows[0].end_time);
+      const { base_price, end_time, status } = auctionRows[0];
+      const now = new Date();
+      const end = new Date(end_time);
 
-      if (auctionRows[0].status === "ended" || new Date() >= endTime)
+      // ▶ Validar estado y tiempo restante
+      if (status === "ended" || now >= end)
         return socket.emit("errorBid", { message: "La subasta ya ha finalizado." });
 
-      // Puja más alta actual
+      // ▶ Obtener puja más alta actual
       const [maxRows] = await db.query(
-        `SELECT bid_amount FROM bids WHERE id_auctions = ? ORDER BY bid_amount DESC LIMIT 1`,
+        "SELECT bid_amount FROM bids WHERE id_auctions = ? ORDER BY bid_amount DESC LIMIT 1",
         [auctionId]
       );
       const highestBid = maxRows.length ? parseFloat(maxRows[0].bid_amount) : 0;
 
-      // Umbral correcto (mayor entre base y actual)
-      const threshold = Math.max(basePrice, highestBid);
+      // ✅ Umbral correcto
+      const threshold = Math.max(parseFloat(base_price), highestBid);
 
-      if (amount <= threshold)
+      // ❌ Si la puja no supera el umbral
+      if (amount <= threshold) {
         return socket.emit("errorBid", {
-          message: `La puja mínima debe ser mayor a $${threshold.toFixed(2)}`
+          message: `La puja mínima debe ser mayor a $${threshold.toFixed(2)}.`,
         });
+      }
 
-      // Insertar puja
+      // ▶ Insertar puja
       await db.query(
         "INSERT INTO bids (id_auctions, id_users, bid_amount) VALUES (?, ?, ?)",
         [auctionId, userId, amount]
@@ -261,7 +235,7 @@ io.on("connection", (socket) => {
 
       console.log(`✅ Puja registrada: ${decoded.username} -> #${auctionId} $${amount}`);
 
-      // Emitir actualización
+      // ▶ Emitir actualización
       const [highest] = await db.query(
         `SELECT b.bid_amount, u.username
          FROM bids b
@@ -275,20 +249,22 @@ io.on("connection", (socket) => {
       io.emit("updateBids", {
         id_auctions: auctionId,
         highestBid: highest[0]?.bid_amount ?? amount,
-        highestBidUser: highest[0]?.username ?? decoded.username
+        highestBidUser: highest[0]?.username ?? decoded.username,
       });
     } catch (err) {
       console.error("❌ Error al registrar la puja:", err);
-      socket.emit("errorBid", { message: "Error interno al registrar la puja" });
+      socket.emit("errorBid", { message: "Error interno al registrar la puja." });
     }
   });
 });
 
-// ======================================================
-// 🚀 INICIAR SERVIDOR
-// ======================================================
+/* ======================================================
+🚀 INICIAR SERVIDOR
+====================================================== */
 server.listen(PORT, async () => {
   console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
+
+  await setTimezone(); // ✅ Ajustar zona horaria antes de iniciar cron
 
   try {
     const [rows] = await db.query("SELECT NOW() AS hora_servidor");
