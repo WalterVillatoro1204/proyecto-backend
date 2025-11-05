@@ -8,14 +8,14 @@ import http from "http";
 import { Server } from "socket.io";
 import jwt from "jsonwebtoken";
 import dotenv from "dotenv";
-import cron from "node-cron"
+import cron from "node-cron";
 import notificationRoutes from "./routes/notifications.js";
 
 dotenv.config();
 
 const app = express();
 const server = http.createServer(app);
-const PORT = process.env.PORT || 8080; // ✅ Cambiado a 8080
+const PORT = process.env.PORT || 8080;
 const secret = process.env.JWT_SECRET;
 
 // ======================
@@ -70,14 +70,12 @@ io.use((socket, next) => {
   try {
     const token = socket.handshake.auth?.token;
 
-    // Si no hay token, permitimos conexión como visitante
     if (!token) {
       console.log("⚠️ Cliente conectado sin token (modo visitante)");
       socket.username = "visitante";
       return next();
     }
 
-    // Validar token
     const decoded = jwt.verify(token, secret);
     socket.userId = decoded.id;
     socket.username = decoded.username;
@@ -173,24 +171,9 @@ io.on("connection", (socket) => {
 });
 
 // ======================
-//  Iniciar servidor
+//  Función del Cron Job
 // ======================
-server.listen(PORT, async () => {
-  console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
-  
-  // Verificar conexión a DB después de iniciar
-  try {
-    const [rows] = await db.query("SELECT NOW() AS hora_servidor");
-    console.log("🕒 Hora actual en MySQL:", rows[0].hora_servidor);
-  } catch (err) {
-    console.error("❌ Error al conectar con la DB:", err.message);
-  }
-});
-
-// ======================
-//  Cron Job - DESPUÉS de inicializar io
-// ======================
-cron.schedule("* * * * *", async () => {
+async function checkEndedAuctions() {
   try {
     console.log("⏱️ Ejecutando cron de verificación de subastas...");
 
@@ -256,8 +239,7 @@ cron.schedule("* * * * *", async () => {
       }
 
       for (const loser of losers) {
-        const messageLoser = `😢 Hola ${loser.username}, la subasta #${auction.id_auctions} finalizó. 
-El ganador fue ${usernameWinner} con una puja de $${bidAmountWinner}. ¡Mejor suerte en la próxima!`;
+        const messageLoser = `😢 Hola ${loser.username}, la subasta #${auction.id_auctions} finalizó. El ganador fue ${usernameWinner} con una puja de $${bidAmountWinner}. ¡Mejor suerte en la próxima!`;
 
         await db.query(
           "INSERT INTO notifications (id_user, id_auction, message) VALUES (?, ?, ?)",
@@ -275,4 +257,22 @@ El ganador fue ${usernameWinner} con una puja de $${bidAmountWinner}. ¡Mejor su
   } catch (err) {
     console.error("❌ Error en cron de verificación:", err.message);
   }
+}
+
+// ======================
+//  Iniciar servidor
+// ======================
+server.listen(PORT, async () => {
+  console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
+  
+  try {
+    const [rows] = await db.query("SELECT NOW() AS hora_servidor");
+    console.log("🕒 Hora actual en MySQL:", rows[0].hora_servidor);
+  } catch (err) {
+    console.error("❌ Error al conectar con la DB:", err.message);
+  }
+
+  // Iniciar cron job DESPUÉS de que el servidor esté corriendo
+  console.log("⏰ Iniciando cron job...");
+  cron.schedule("* * * * *", checkEndedAuctions);
 });
