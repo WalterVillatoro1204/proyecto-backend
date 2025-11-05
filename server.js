@@ -29,9 +29,13 @@ async function checkEndedAuctions() {
     const [endedAuctions] = await db.query(`
       SELECT a.id_auctions, a.title, a.end_time
       FROM auctions a
-      WHERE a.end_time <= UTC_TIMESTAMP()
+      WHERE a.end_time <= NOW()
       AND a.status = 'active'
     `);
+
+    const [rows] = await db.query("SELECT NOW() AS hora_mysql, UTC_TIMESTAMP() AS hora_utc");
+    console.log("🕒 Hora MySQL local:", rows[0].hora_mysql);
+    console.log("🕒 Hora UTC:", rows[0].hora_utc);
 
     if (endedAuctions.length === 0) {
       console.log("🟢 No hay subastas finalizadas por cerrar.");
@@ -196,6 +200,7 @@ io.on("connection", (socket) => {
 
       console.log(`💬 Puja recibida: usuario ${decoded.username}, subasta ${auctionId}, monto $${amount}`);
 
+      // Obtener datos de la subasta
       const [auctionData] = await db.query(
         `SELECT base_price, end_time FROM auctions WHERE id_auctions = ?`,
         [auctionId]
@@ -214,12 +219,14 @@ io.on("connection", (socket) => {
         [auctionId]
       );
 
-      const currentBid = currentHighest.length > 0 ? parseFloat(currentHighest[0].bid_amount) : 0;
+      const currentBid = currentHighest.length > 0
+        ? parseFloat(currentHighest[0].bid_amount)
+        : 0;
 
-      // 🚫 Validación: no permitir pujas menores o iguales
+      // 🚫 Validar monto: debe ser estrictamente mayor que ambos
       if (amount <= basePrice || amount <= currentBid) {
         socket.emit("errorBid", {
-          message: `La puja debe ser mayor al precio base ($${basePrice}) y a la puja más alta actual ($${currentBid}).`,
+          message: `Tu puja debe ser mayor a $${Math.max(basePrice, currentBid).toFixed(2)}`,
         });
         return;
       }
