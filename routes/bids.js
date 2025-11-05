@@ -109,15 +109,26 @@ router.get("/history", verifyToken, async (req, res) => {
     );
 
     // ✅ CLAVE: Convertir image_data (Buffer) a base64
-    const auctionsWithImages = rows.map(row => ({
-      ...row,
-    image_data:
-      row.image_data && Buffer.isBuffer(row.image_data)
-        ? `data:image/jpeg;base64,${row.image_data.toString("base64")}`
-        : typeof row.image_data === "string"
-        ? row.image_data
-        : null,
-    }));
+    const auctionsWithImages = rows.map((row) => {
+      let imageBase64 = null;
+
+      if (row.image_data) {
+        if (Buffer.isBuffer(row.image_data)) {
+          imageBase64 = `data:image/jpeg;base64,${row.image_data.toString("base64")}`;
+        } else if (row.image_data.data) {
+          // caso: { type: 'Buffer', data: [...] }
+          imageBase64 = `data:image/jpeg;base64,${Buffer.from(row.image_data.data).toString("base64")}`;
+        } else if (typeof row.image_data === "string") {
+          // ya viene codificada
+          imageBase64 = row.image_data;
+        }
+      }
+
+      return {
+        ...row,
+        image_data: imageBase64,
+      };
+    });
 
     console.log(`📊 Historial solicitado por usuario ${userId}: ${auctionsWithImages.length} subastas`);
 
