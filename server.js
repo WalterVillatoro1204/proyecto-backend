@@ -198,11 +198,9 @@ io.on("connection", (socket) => {
         return;
       }
 
-      console.log(`💬 Puja recibida: usuario ${decoded.username}, subasta ${auctionId}, monto $${amount}`);
-
-      // Obtener datos de la subasta
+      // 🔹 Obtener información de la subasta
       const [auctionData] = await db.query(
-        `SELECT base_price, end_time FROM auctions WHERE id_auctions = ?`,
+        `SELECT base_price, end_time, status FROM auctions WHERE id_auctions = ?`,
         [auctionId]
       );
 
@@ -212,39 +210,50 @@ io.on("connection", (socket) => {
       }
 
       const basePrice = parseFloat(auctionData[0].base_price);
+      const endTime = new Date(auctionData[0].end_time);
+      const now = new Date();
 
-      // Obtener la puja más alta actual
+      // 🚫 Si la subasta ya terminó
+      if (now >= endTime || auctionData[0].status === "ended") {
+        socket.emit("errorBid", { message: "La subasta ya ha finalizado." });
+        return;
+      }
+
+      // 🔹 Obtener la puja más alta actual
       const [currentHighest] = await db.query(
         `SELECT bid_amount FROM bids WHERE id_auctions = ? ORDER BY bid_amount DESC LIMIT 1`,
         [auctionId]
       );
 
-      const currentBid = currentHighest.length > 0
-        ? parseFloat(currentHighest[0].bid_amount)
-        : 0;
+      const currentBid =
+        currentHighest.length > 0
+          ? parseFloat(currentHighest[0].bid_amount)
+          : basePrice; // 🟢 Si no hay pujas, se usa el precio base como referencia mínima
 
-      // 🚫 Validar monto: debe ser estrictamente mayor que ambos
-      if (amount <= basePrice || amount <= currentBid) {
+      // 🚫 Validar monto: debe ser estrictamente mayor al actual o al base
+      if (amount <= currentBid) {
         socket.emit("errorBid", {
-          message: `Tu puja debe ser mayor a $${Math.max(basePrice, currentBid).toFixed(2)}`,
+          message: `Tu puja debe ser mayor a $${currentBid.toFixed(2)}`,
         });
         return;
       }
 
+      // ✅ Registrar la puja
       await db.query(
         "INSERT INTO bids (id_auctions, id_users, bid_amount) VALUES (?, ?, ?)",
         [auctionId, userId, amount]
       );
 
-      console.log(`✅ Puja registrada correctamente en la subasta #${auctionId}`);
+      console.log(`✅ Puja registrada: usuario ${decoded.username}, subasta ${auctionId}, $${amount}`);
 
+      // 🔹 Obtener la nueva puja más alta
       const [highest] = await db.query(
         `SELECT b.bid_amount, u.username 
-         FROM bids b
-         JOIN users u ON b.id_users = u.id_users
-         WHERE b.id_auctions = ?
-         ORDER BY b.bid_amount DESC, b.bid_time ASC
-         LIMIT 1`,
+        FROM bids b
+        JOIN users u ON b.id_users = u.id_users
+        WHERE b.id_auctions = ?
+        ORDER BY b.bid_amount DESC, b.bid_time ASC
+        LIMIT 1`,
         [auctionId]
       );
 
@@ -260,6 +269,7 @@ io.on("connection", (socket) => {
       socket.emit("errorBid", { message: "Error interno al registrar la puja" });
     }
   });
+
 
   socket.on("disconnect", () => {
     console.log("🔴 Cliente desconectado:", socket.id);
@@ -281,7 +291,7 @@ server.listen(PORT, async () => {
 
   // Iniciar cron job DESPUÉS de que el servidor esté corriendo
   console.log("⏰ Iniciando cron job...");
-  cron.schedule("* * * * *", checkEndedAuctions);
+  cron.schedule("*/10 * * * * *", checkEndedAuctions);
 });
 
 // ======================
@@ -299,5 +309,5 @@ server.listen(PORT, async () => {
 
   // Iniciar cron job DESPUÉS de que el servidor esté corriendo
   console.log("⏰ Iniciando cron job...");
-  cron.schedule("* * * * *", checkEndedAuctions);
+  cron.schedule("*/10 * * * * *", checkEndedAuctions);
 });
