@@ -48,7 +48,7 @@ router.post("/register", async (req, res) => {
 // Login de usuario
 router.post("/login", async (req, res) => {
     const { username, password } = req.body;
-    console.log("📥 Body recibido:", req.body);
+    console.log("Body recibido:", req.body);
     try {
         const [rows] = await db.query(
             "SELECT * FROM users WHERE username = ?",
