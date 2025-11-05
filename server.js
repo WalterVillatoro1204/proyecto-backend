@@ -24,15 +24,13 @@ const secret = process.env.JWT_SECRET;
 app.use(express.json());
 app.use(cors({
   origin: [
-    "https://main.d3rcj7yl7zv9wm.amplifyapp.com", // dominio real de Amplify
-    "https://www.mycarbid.click" // dominio personalizado si ya lo tienes vinculado
+    "https://www.mycarbid.click",
+    "https://mycarbid.click",
+    "https://main.d3rcj7yl7zv9wm.amplifyapp.com",
   ],
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
-  credentials: true,
 }));
-
-
 
 const io = new Server(server, {
   cors: {

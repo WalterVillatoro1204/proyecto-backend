@@ -47,9 +47,9 @@ router.post("/register", async (req, res) => {
 
 // Login de usuario
 router.post("/login", async (req, res) => {
-    console.log("Body recibido:", req.body);
-    const { username, password } = req.body;
-    console.log("Body recibido:", req.body);
+  console.log("📥 Request recibido en /login");
+  console.log("📥 Headers:", req.headers);
+  console.log("📥 Body recibido:", req.body);
 
   try {
     const { username, password } = req.body;
@@ -58,43 +58,36 @@ router.post("/login", async (req, res) => {
       return res.status(400).json({ message: "Datos incompletos" });
     }
 
-    try {
-        const [rows] = await db.query(
-            "SELECT * FROM users WHERE username = ?",
-            [username]
-        );
-        if (rows.length === 0) {
-            return res.status(401).json({ message: "Usuario no encontrado" });
-        }
-
-        const user = rows[0];
-
-        //Verifica la contraseña
-        const validpassword = await bcrypt.compare(password, user.password_hash);
-
-        if (!validpassword) {
-            return res.status(401).json({ message: "Credenciales incorrectas" });
-        }
-
-        //Generando Token
-        const token = jwt.sign(
-            { id: user.id_users, username: user.username },
-            secret,
-            { expiresIn: "1h" }
-        );
-
-        return res.json({
-            message: "Login exitoso",
-            token,
-            user: {
-                id_users: user.id_users,
-                username: user.username
-            }
-        });
-    } catch (err) {
-        return res.status(500).json({ error: err.message });
+    const [rows] = await db.query("SELECT * FROM users WHERE username = ?", [username]);
+    if (rows.length === 0) {
+      console.log("❌ Usuario no encontrado");
+      return res.status(401).json({ message: "Usuario no encontrado" });
     }
 
+    const user = rows[0];
+    const validPassword = await bcrypt.compare(password, user.password_hash);
+
+    if (!validPassword) {
+      console.log("❌ Contraseña incorrecta");
+      return res.status(401).json({ message: "Credenciales incorrectas" });
+    }
+
+    const token = jwt.sign(
+      { id: user.id_users, username: user.username },
+      secret,
+      { expiresIn: "1h" }
+    );
+
+    console.log(`✅ Login exitoso para usuario ${username}`);
+
+    return res.json({
+      message: "Login exitoso",
+      token,
+      user: {
+        id_users: user.id_users,
+        username: user.username,
+      },
+    });
   } catch (error) {
     console.error("💥 Error en login:", error);
     return res.status(500).json({ message: "Error interno en el servidor" });
