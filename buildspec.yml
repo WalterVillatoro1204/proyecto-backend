@@ -1,0 +1,20 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 18
+  pre_build:
+    commands:
+      - echo "Instalando dependencias..."
+      - npm install
+  build:
+    commands:
+      - echo "Build completado en `date`"
+
+artifacts:
+  files:
+    - '**/*'
+  base-directory: '.'
+  exclude-paths:
+    - node_modules/**/*
