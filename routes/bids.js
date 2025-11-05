@@ -111,9 +111,12 @@ router.get("/history", verifyToken, async (req, res) => {
     // ✅ CLAVE: Convertir image_data (Buffer) a base64
     const auctionsWithImages = rows.map(row => ({
       ...row,
-      image_data: row.image_data 
+    image_data:
+      row.image_data && Buffer.isBuffer(row.image_data)
         ? `data:image/jpeg;base64,${row.image_data.toString("base64")}`
-        : null
+        : typeof row.image_data === "string"
+        ? row.image_data
+        : null,
     }));
 
     console.log(`📊 Historial solicitado por usuario ${userId}: ${auctionsWithImages.length} subastas`);
