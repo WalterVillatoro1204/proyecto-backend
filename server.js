@@ -19,6 +19,76 @@ const PORT = process.env.PORT || 8080;
 const secret = process.env.JWT_SECRET;
 
 // ======================
+// 🔄 Verificar subastas finalizadas
+// ======================
+async function checkEndedAuctions() {
+  try {
+    console.log("⏱️ Ejecutando verificación de subastas...");
+
+    // 1️⃣ Obtener subastas que ya terminaron y siguen activas
+    const [endedAuctions] = await db.query(`
+      SELECT a.id_auctions, a.title, a.end_time
+      FROM auctions a
+      WHERE a.end_time <= UTC_TIMESTAMP()
+      AND a.status = 'active'
+    `);
+
+    if (endedAuctions.length === 0) {
+      console.log("🟢 No hay subastas finalizadas por cerrar.");
+      return;
+    }
+
+    console.log(`⚠️ Se encontraron ${endedAuctions.length} subasta(s) finalizada(s).`);
+
+    for (const auction of endedAuctions) {
+      const auctionId = auction.id_auctions;
+
+      // 2️⃣ Obtener la puja más alta
+      const [winner] = await db.query(
+        `SELECT b.id_users, b.bid_amount, u.username
+         FROM bids b
+         JOIN users u ON b.id_users = u.id_users
+         WHERE b.id_auctions = ?
+         ORDER BY b.bid_amount DESC, b.bid_time ASC
+         LIMIT 1`,
+        [auctionId]
+      );
+
+      // 3️⃣ Actualizar estado de la subasta
+      await db.query(`UPDATE auctions SET status = 'ended' WHERE id_auctions = ?`, [auctionId]);
+
+      // 4️⃣ Registrar notificación según haya o no ganador
+      if (winner.length > 0) {
+        const userId = winner[0].id_users;
+        const amount = winner[0].bid_amount;
+        const username = winner[0].username;
+
+        await db.query(
+          `INSERT INTO notifications (id_auction, id_user, message)
+           VALUES (?, ?, ?)`,
+          [auctionId, userId, `🏆 🎉 ¡Felicidades ${username}! Ganaste la subasta #${auctionId} con una puja de $${amount.toLocaleString("en-US")}`]
+        );
+
+        console.log(`✅ Subasta #${auctionId} finalizada. Ganador: ${username} con $${amount}`);
+      } else {
+        await db.query(
+          `INSERT INTO notifications (id_auction, id_user, message)
+           VALUES (?, NULL, ?)`,
+          [auctionId, `😢 Nadie ofertó en la subasta #${auctionId}.`]
+        );
+        console.log(`ℹ️ Subasta #${auctionId} finalizada sin pujas.`);
+      }
+
+      // 5️⃣ Emitir evento en tiempo real a todos los clientes conectados
+      io.emit("auctionEnded", { id_auctions: auctionId });
+    }
+  } catch (err) {
+    console.error("❌ Error en checkEndedAuctions:", err.message);
+  }
+}
+
+
+// ======================
 //  Configuración base
 // ======================
 app.use(express.json());
@@ -126,14 +196,30 @@ io.on("connection", (socket) => {
 
       console.log(`💬 Puja recibida: usuario ${decoded.username}, subasta ${auctionId}, monto $${amount}`);
 
+      const [auctionData] = await db.query(
+        `SELECT base_price, end_time FROM auctions WHERE id_auctions = ?`,
+        [auctionId]
+      );
+
+      if (auctionData.length === 0) {
+        socket.emit("errorBid", { message: "Subasta no encontrada." });
+        return;
+      }
+
+      const basePrice = parseFloat(auctionData[0].base_price);
+
+      // Obtener la puja más alta actual
       const [currentHighest] = await db.query(
         `SELECT bid_amount FROM bids WHERE id_auctions = ? ORDER BY bid_amount DESC LIMIT 1`,
         [auctionId]
       );
 
-      if (currentHighest.length > 0 && amount <= currentHighest[0].bid_amount) {
+      const currentBid = currentHighest.length > 0 ? parseFloat(currentHighest[0].bid_amount) : 0;
+
+      // 🚫 Validación: no permitir pujas menores o iguales
+      if (amount <= basePrice || amount <= currentBid) {
         socket.emit("errorBid", {
-          message: `Tu puja debe ser mayor a $${currentHighest[0].bid_amount}`,
+          message: `La puja debe ser mayor al precio base ($${basePrice}) y a la puja más alta actual ($${currentBid}).`,
         });
         return;
       }
@@ -174,93 +260,22 @@ io.on("connection", (socket) => {
 });
 
 // ======================
-//  Función del Cron Job
+//  Iniciar servidor
 // ======================
-async function checkEndedAuctions() {
+server.listen(PORT, async () => {
+  console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
+  
   try {
-    console.log("⏱️ Ejecutando cron de verificación de subastas...");
-
-    const [endedAuctions] = await db.query(`
-      SELECT a.id_auctions
-      FROM auctions a
-      WHERE a.end_time <= NOW()
-      AND a.id_auctions NOT IN (
-        SELECT n.id_auction FROM notifications n
-      )
-    `);
-
-    if (endedAuctions.length === 0) {
-      console.log("ℹ️ No hay subastas finalizadas pendientes de notificación.");
-      return;
-    }
-
-    for (const auction of endedAuctions) {
-      console.log(`⚙️ Procesando subasta #${auction.id_auctions}...`);
-
-      const [winner] = await db.query(`
-        SELECT b.id_users, u.username, b.bid_amount
-        FROM bids b
-        JOIN users u ON b.id_users = u.id_users
-        WHERE b.id_auctions = ?
-        ORDER BY b.bid_amount DESC, b.bid_time ASC
-        LIMIT 1
-      `, [auction.id_auctions]);
-
-      if (winner.length === 0) {
-        console.log(`⚠️ Subasta #${auction.id_auctions} no tiene pujas.`);
-        continue;
-      }
-
-      const userIdWinner = winner[0].id_users;
-      const usernameWinner = winner[0].username;
-      const bidAmountWinner = winner[0].bid_amount;
-
-      const messageWinner = `🎉 ¡Felicidades ${usernameWinner}! Ganaste la subasta #${auction.id_auctions} con una puja de $${bidAmountWinner}.`;
-
-      await db.query(
-        "INSERT INTO notifications (id_user, id_auction, message) VALUES (?, ?, ?)",
-        [userIdWinner, auction.id_auctions, messageWinner]
-      );
-
-      io.to(`user_${userIdWinner}`).emit("newNotification", {
-        message: messageWinner,
-        auctionId: auction.id_auctions,
-      });
-
-      console.log(`✅ Notificación enviada al ganador: ${usernameWinner}`);
-
-      const [losers] = await db.query(`
-        SELECT DISTINCT b.id_users, u.username
-        FROM bids b
-        JOIN users u ON b.id_users = u.id_users
-        WHERE b.id_auctions = ? AND b.id_users != ?
-      `, [auction.id_auctions, userIdWinner]);
-
-      if (losers.length === 0) {
-        console.log(`ℹ️ No hay perdedores en la subasta #${auction.id_auctions}`);
-        continue;
-      }
-
-      for (const loser of losers) {
-        const messageLoser = `😢 Hola ${loser.username}, la subasta #${auction.id_auctions} finalizó. El ganador fue ${usernameWinner} con una puja de $${bidAmountWinner}. ¡Mejor suerte en la próxima!`;
-
-        await db.query(
-          "INSERT INTO notifications (id_user, id_auction, message) VALUES (?, ?, ?)",
-          [loser.id_users, auction.id_auctions, messageLoser]
-        );
-
-        io.to(`user_${loser.id_users}`).emit("newNotification", {
-          message: messageLoser,
-          auctionId: auction.id_auctions,
-        });
-
-        console.log(`📩 Notificación enviada al perdedor: ${loser.username}`);
-      }
-    }
+    const [rows] = await db.query("SELECT NOW() AS hora_servidor");
+    console.log("🕒 Hora actual en MySQL:", rows[0].hora_servidor);
   } catch (err) {
-    console.error("❌ Error en cron de verificación:", err.message);
+    console.error("❌ Error al conectar con la DB:", err.message);
   }
-}
+
+  // Iniciar cron job DESPUÉS de que el servidor esté corriendo
+  console.log("⏰ Iniciando cron job...");
+  cron.schedule("* * * * *", checkEndedAuctions);
+});
 
 // ======================
 //  Iniciar servidor
