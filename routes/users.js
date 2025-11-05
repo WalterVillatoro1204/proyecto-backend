@@ -47,8 +47,17 @@ router.post("/register", async (req, res) => {
 
 // Login de usuario
 router.post("/login", async (req, res) => {
+    console.log("Body recibido:", req.body);
     const { username, password } = req.body;
     console.log("Body recibido:", req.body);
+
+  try {
+    const { username, password } = req.body;
+    if (!username || !password) {
+      console.log("❌ Falta usuario o contraseña");
+      return res.status(400).json({ message: "Datos incompletos" });
+    }
+
     try {
         const [rows] = await db.query(
             "SELECT * FROM users WHERE username = ?",
@@ -85,6 +94,11 @@ router.post("/login", async (req, res) => {
     } catch (err) {
         return res.status(500).json({ error: err.message });
     }
+
+  } catch (error) {
+    console.error("💥 Error en login:", error);
+    return res.status(500).json({ message: "Error interno en el servidor" });
+  }
 });
 
 router.get("/information", verifyToken, async (req, res) => {

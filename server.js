@@ -21,6 +21,7 @@ const secret = process.env.JWT_SECRET;
 // ======================
 //  Configuración base
 // ======================
+app.use(express.json());
 app.use(cors({
   origin: [
     "https://main.d3rcj7yl7zv9wm.amplifyapp.com", // dominio real de Amplify
@@ -31,7 +32,7 @@ app.use(cors({
   credentials: true,
 }));
 
-app.use(express.json());
+
 
 const io = new Server(server, {
   cors: {
