@@ -10,7 +10,6 @@ const router = express.Router();
 const secret = process.env.JWT_SECRET;
 
 // Registro de usuario
-// Registro de usuario
 router.post("/register", async (req, res) => {
   const { username, password } = req.body;
   try {
