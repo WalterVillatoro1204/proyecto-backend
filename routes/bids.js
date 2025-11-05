@@ -1,20 +1,21 @@
+// 📁 routes/bids.js
 import express from "express";
 import { db } from "../db.js";
-import { verifyToken } from "./users.js"; // ✅ Importación correcta
+import { verifyToken } from "./users.js"; // ✅ Middleware para validar JWT
 
 const router = express.Router();
 
 // ============================================================
-// 🟢 Crear una nueva puja (validada, segura y atómica)
+// 🟢 Crear una nueva puja (validación segura y sincronizada con el socket)
 // ============================================================
 router.post("/", verifyToken, async (req, res) => {
   const { id_auctions, bid_amount } = req.body;
-  const userId = req.user.id; // ✅ viene del token JWT
+  const userId = req.user.id;
 
   try {
-    // 1️⃣ Verificar si la subasta existe y está activa
+    // 1️⃣ Verificar que la subasta exista y esté activa
     const [auction] = await db.query(
-      `SELECT end_time, base_price FROM auctions WHERE id_auctions = ?`,
+      `SELECT base_price, end_time, status FROM auctions WHERE id_auctions = ?`,
       [id_auctions]
     );
 
@@ -22,49 +23,57 @@ router.post("/", verifyToken, async (req, res) => {
       return res.status(404).json({ message: "Subasta no encontrada." });
     }
 
-    const endTime = new Date(auction[0].end_time);
+    const { base_price, end_time, status } = auction[0];
+    const basePrice = parseFloat(base_price);
     const now = new Date();
 
-    if (now >= endTime) {
+    if (status === "ended" || now >= new Date(end_time)) {
       return res.status(400).json({
         message: "⛔ La subasta ya ha finalizado. No se pueden realizar más pujas.",
       });
     }
 
-    // 2️⃣ Registrar la puja si es válida (mayor que la actual)
-    const [result] = await db.query(
-      `
-      INSERT INTO bids (id_auctions, id_users, bid_amount)
-      SELECT ?, ?, ?
-      FROM auctions a
-      WHERE a.id_auctions = ?
-        AND UTC_TIMESTAMP() < a.end_time
-        AND ? > GREATEST(
-              a.base_price,
-              COALESCE((SELECT MAX(bid_amount) FROM bids WHERE id_auctions = a.id_auctions), 0)
-            );
-      `,
-      [id_auctions, userId, bid_amount, id_auctions, bid_amount]
+    if (isNaN(bid_amount) || bid_amount <= 0) {
+      return res.status(400).json({ message: "Monto de puja inválido." });
+    }
+
+    // 2️⃣ Obtener la puja más alta actual (si existe)
+    const [currentBid] = await db.query(
+      `SELECT bid_amount FROM bids WHERE id_auctions = ? ORDER BY bid_amount DESC LIMIT 1`,
+      [id_auctions]
     );
 
-    if (result.affectedRows === 0) {
+    const highestBid = currentBid.length ? parseFloat(currentBid[0].bid_amount) : 0;
+    const threshold = Math.max(basePrice, highestBid);
+
+    // 3️⃣ Validar monto mínimo permitido
+    if (bid_amount <= threshold) {
       return res.status(400).json({
-        message: "⛔ Puja inválida: monto menor o igual a la actual, o subasta cerrada.",
+        message: `⛔ La puja mínima debe ser mayor a $${threshold.toFixed(2)}.`,
       });
     }
 
-    res.status(201).json({
+    // 4️⃣ Insertar la puja en la base de datos
+    const [result] = await db.query(
+      `INSERT INTO bids (id_auctions, id_users, bid_amount) VALUES (?, ?, ?)`,
+      [id_auctions, userId, bid_amount]
+    );
+
+    console.log(`✅ Nueva puja registrada: user=${userId} | auction=${id_auctions} | monto=$${bid_amount}`);
+
+    return res.status(201).json({
       message: "✅ Puja registrada correctamente",
-      id: result.insertId,
+      id_bids: result.insertId,
+      bid_amount,
     });
   } catch (err) {
-    console.error("❌ Error al crear puja:", err);
-    res.status(500).json({ error: err.message });
+    console.error("❌ Error al registrar la puja:", err.message);
+    return res.status(500).json({ message: "Error interno al registrar la puja" });
   }
 });
 
 // ============================================================
-// 📜 Historial de pujas del usuario autenticado
+// 📜 Obtener historial de pujas del usuario autenticado
 // ============================================================
 router.get("/history", verifyToken, async (req, res) => {
   try {
@@ -97,10 +106,10 @@ router.get("/history", verifyToken, async (req, res) => {
       [userId]
     );
 
-    res.json(rows);
+    return res.status(200).json(rows);
   } catch (err) {
-    console.error("❌ Error al obtener historial:", err);
-    res.status(500).json({ message: "Error al obtener historial de subastas" });
+    console.error("❌ Error al obtener historial:", err.message);
+    return res.status(500).json({ message: "Error al obtener historial de subastas" });
   }
 });
 
