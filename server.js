@@ -204,7 +204,7 @@ io.on("connection", (socket) => {
 
       // ▶ Obtener datos de la subasta
       const [auctionRows] = await db.query(
-        "SELECT base_price, end_time, status FROM auctions WHERE id_auctions = ?",
+        "SELECT CAST(base_price AS DECIMAL(10,2)) AS base_price, end_time, status FROM auctions WHERE id_auctions = ?",
         [auctionId]
       );
 
@@ -212,7 +212,7 @@ io.on("connection", (socket) => {
         return socket.emit("errorBid", { message: "Subasta no encontrada." });
 
       // 🔧 Asegurar conversión numérica exacta
-      const basePrice = parseFloat(auctionRows[0].base_price || 0);
+      const basePrice = parseFloat(auctionRows[0].base_price || "0");
       const endTime = new Date(auctionRows[0].end_time);
       const now = new Date();
 
@@ -226,6 +226,9 @@ io.on("connection", (socket) => {
       );
 
       const highestBid = maxRows.length ? parseFloat(maxRows[0].bid_amount || 0) : 0;
+      if (isNaN(basePrice) || isNaN(highestBid)) {
+        console.warn(`⚠️ Error de datos numéricos en subasta #${auctionId}: base=${auctionRows[0].base_price}, max=${maxRows[0]?.bid_amount}`);
+      }
       const threshold = Math.max(basePrice, highestBid);
 
       // ❌ Si la puja no supera el umbral
