@@ -22,8 +22,12 @@ const secret = process.env.JWT_SECRET;
 //  Configuración base
 // ======================
 app.use(cors({
-  origin: "*",
-  methods: ["GET", "POST", "PUT", "DELETE"],
+  origin: [
+    "https://main.d3rcj7yl7zv9wm.amplifyapp.com", // dominio real de Amplify
+    "https://www.mycarbid.click" // dominio personalizado si ya lo tienes vinculado
+  ],
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
   credentials: true,
 }));
 
