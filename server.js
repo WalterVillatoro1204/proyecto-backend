@@ -42,7 +42,7 @@ async function checkEndedAuctions() {
   try {
     const [timeCheck] = await db.query("SELECT NOW(6) as server_time");
     const serverTime = new Date(timeCheck[0].server_time);
-    console.log(`⏰ [${serverTime.toISOString()}] Verificando subastas...`);
+    serverTime.setHours(serverTime.getHours() - 6);
 
     // ============================================================
     // 🔍 Buscar subastas activas que YA superaron su fin real
