@@ -56,7 +56,7 @@ async function checkEndedAuctions() {
         TIMESTAMPDIFF(SECOND, end_time, NOW()) as seconds_past_end
       FROM auctions
       WHERE status = 'active'
-        AND end_time < NOW()
+        AND NOW() >= end_time + INTERVAL 1 SECOND
       ORDER BY end_time ASC
     `);
 
@@ -72,7 +72,7 @@ async function checkEndedAuctions() {
       console.log(`   ⏱️  Tiempo transcurrido desde fin: ${seconds_past_end} segundos`);
 
       // ❌ SI NO HA PASADO AL MENOS 1 SEGUNDO desde el fin, SALTAR
-      if (seconds_past_end < 1) {
+      if (seconds_past_end < 2) {
         console.log(`   ⏳ Aún no cumple el segundo completo. Esperando...`);
         continue;
       }
@@ -373,5 +373,5 @@ server.listen(PORT, async () => {
   }
 
   console.log("⏰ Iniciando cron job...");
-  cron.schedule("*/2 * * * * *", checkEndedAuctions);
+  cron.schedule("*/5 * * * * *", checkEndedAuctions);
 });
