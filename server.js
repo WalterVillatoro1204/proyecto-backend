@@ -35,48 +35,52 @@ async function setTimezone() {
   }
 }
 
-/* ======================================================
-🔄 FUNCIÓN: Verificar subastas finalizadas (CORREGIDA)
-====================================================== */
 async function checkEndedAuctions() {
   try {
+    // 🕒 Obtener hora del servidor MySQL (en UTC)
     const [timeCheck] = await db.query("SELECT NOW(6) as server_time");
-    const serverTime = new Date(timeCheck[0].server_time);
-    serverTime.setHours(serverTime.getHours() - 6);
+    const mysqlTime = new Date(timeCheck[0].server_time);
 
-    // ============================================================
-    // 🔍 Buscar subastas activas que YA superaron su fin real
-    // (con 1 segundo de margen de seguridad)
-    // ============================================================
+    // 🔧 Ajustar manualmente la hora MySQL a Guatemala (UTC-6)
+    const serverTime = new Date(mysqlTime.getTime() - 6 * 60 * 60 * 1000);
+
+    console.log(`⏰ [${serverTime.toISOString()}] Verificando subastas (hora local ajustada)`);
+
+    // 🔍 Buscar subastas activas que ya pasaron su fin según la hora local
     const [rows] = await db.query(`
-      SELECT 
-        id_auctions, 
-        title, 
-        end_time,
-        TIMESTAMPDIFF(SECOND, end_time, NOW()) AS seconds_past_end
+      SELECT id_auctions, title, end_time
       FROM auctions
       WHERE status = 'active'
-        AND NOW() >= end_time + INTERVAL 1 SECOND
       ORDER BY end_time ASC
     `);
 
     if (!rows.length) return;
 
     for (const auction of rows) {
-      const { id_auctions, title, end_time, seconds_past_end } = auction;
-      console.log(`\n📋 Evaluando subasta #${id_auctions} (${title})`);
-      console.log(`   ⏰ Fin programado: ${new Date(end_time).toISOString()}`);
-      console.log(`   ⏱️ Han pasado ${seconds_past_end}s desde el fin.`);
+      const { id_auctions, title, end_time } = auction;
 
-      // Esperar 2 s completos tras el fin antes de cerrar
-      if (seconds_past_end < 2) {
-        console.log(`   ⏳ Esperando margen de 2 s tras el fin antes de cerrar...`);
+      const endTime = new Date(end_time);
+      const now = new Date(serverTime); // usar hora ajustada
+      const diffSeconds = (now - endTime) / 1000;
+
+      console.log(`\n📋 Subasta #${id_auctions} (${title})`);
+      console.log(`   🕒 Fin programado: ${endTime.toISOString()}`);
+      console.log(`   🕓 Hora actual: ${now.toISOString()}`);
+      console.log(`   ⏱️ Diferencia: ${diffSeconds.toFixed(2)} segundos`);
+
+      // ⏳ Si aún no ha terminado, saltar
+      if (now < endTime) {
+        console.log("   🚫 Aún no finaliza (esperando su tiempo real)");
         continue;
       }
 
-      // ============================================================
-      // 🕵️‍♂️ Verificar si hubo una puja muy reciente (en los últimos 3 s)
-      // ============================================================
+      // ⚖️ Esperar 2 s tras el fin antes de cerrar
+      if (diffSeconds < 2) {
+        console.log("   ⏳ Esperando margen de 2 s tras el fin...");
+        continue;
+      }
+
+      // 🕵️‍♂️ Revisar si hubo una puja en los últimos 3 s
       const [recentBid] = await db.query(`
         SELECT MAX(bid_time) AS last_bid_time
         FROM bids
@@ -85,22 +89,20 @@ async function checkEndedAuctions() {
 
       if (recentBid[0]?.last_bid_time) {
         const lastBidTime = new Date(recentBid[0].last_bid_time);
-        const lastDiff = (Date.now() - lastBidTime.getTime()) / 1000;
-        if (lastBidTime > new Date(end_time) && lastDiff < 3) {
-          console.log(`⏳ Subasta #${id_auctions}: puja reciente (${lastDiff.toFixed(2)}s). Esperando siguiente ciclo...`);
+        const diffFromLastBid = (now - lastBidTime) / 1000;
+        if (lastBidTime > endTime && diffFromLastBid < 3) {
+          console.log(`   ⏳ Puja reciente (${diffFromLastBid.toFixed(2)} s). Esperando siguiente ciclo.`);
           continue;
         }
       }
 
-      // ============================================================
-      // ✅ Cerrar oficialmente la subasta
-      // ============================================================
+      // 🔒 Cerrar la subasta
       console.log(`   🔒 Cerrando subasta #${id_auctions}...`);
       await db.query("UPDATE auctions SET status = 'ended' WHERE id_auctions = ?", [id_auctions]);
 
-      // ✅ Buscar ganador
+      // 🏆 Buscar ganador
       const [winner] = await db.query(`
-        SELECT b.id_users, b.bid_amount, b.bid_time, u.username
+        SELECT b.id_users, b.bid_amount, u.username
         FROM bids b
         JOIN users u ON u.id_users = b.id_users
         WHERE b.id_auctions = ?
@@ -108,25 +110,24 @@ async function checkEndedAuctions() {
         LIMIT 1
       `, [id_auctions]);
 
+      // Emitir evento por WebSocket
       io.emit("auctionEnded", {
         id_auctions,
-        winner: winner.length > 0 ? winner[0].username : null,
-        bid_amount: winner.length > 0 ? winner[0].bid_amount : null,
+        winner: winner.length ? winner[0].username : null,
+        bid_amount: winner.length ? winner[0].bid_amount : null,
       });
 
-      if (winner.length > 0) {
-        const { id_users, bid_amount, username, bid_time } = winner[0];
+      if (winner.length) {
+        const { id_users, bid_amount, username } = winner[0];
         const formattedAmount = parseFloat(bid_amount).toLocaleString("en-US", {
           minimumFractionDigits: 2,
           maximumFractionDigits: 2,
         });
 
-        console.log(`   🏆 GANADOR: ${username} con $${formattedAmount}`);
-        console.log(`   🕐 Puja ganadora realizada: ${new Date(bid_time).toISOString()}`);
+        console.log(`   🏆 Ganador: ${username} con $${formattedAmount}`);
 
-        // 📧 Notificación al ganador
-        const winnerMessage = `🏆 🎉 ¡Felicidades ${username}! Ganaste la subasta #${id_auctions} (${title}) con una puja de $${formattedAmount}.`;
-
+        // 📨 Notificar ganador
+        const winnerMsg = `🏆 🎉 ¡Felicidades ${username}! Ganaste la subasta #${id_auctions} (${title}) con una puja de $${formattedAmount}.`;
         await db.query(`
           INSERT INTO notifications (id_auction, id_user, message, created_at)
           SELECT ?, ?, ?, NOW()
@@ -134,18 +135,18 @@ async function checkEndedAuctions() {
             SELECT 1 FROM notifications
             WHERE id_auction = ? AND id_user = ? AND message LIKE '🏆 %'
           )
-        `, [id_auctions, id_users, winnerMessage, id_auctions, id_users]);
+        `, [id_auctions, id_users, winnerMsg, id_auctions, id_users]);
 
-        // 📧 Notificaciones a perdedores
-        const [allBidders] = await db.query(`
+        // 📨 Notificar perdedores
+        const [others] = await db.query(`
           SELECT DISTINCT b.id_users, u.username
           FROM bids b
           JOIN users u ON u.id_users = b.id_users
           WHERE b.id_auctions = ? AND b.id_users != ?
         `, [id_auctions, id_users]);
 
-        for (const bidder of allBidders) {
-          const loserMessage = `😢 La subasta #${id_auctions} (${title}) finalizó. ${username} ganó con $${formattedAmount}. ¡Mejor suerte en la próxima!`;
+        for (const o of others) {
+          const msg = `😢 La subasta #${id_auctions} (${title}) finalizó. ${username} ganó con $${formattedAmount}. ¡Mejor suerte en la próxima!`;
           await db.query(`
             INSERT INTO notifications (id_auction, id_user, message, created_at)
             SELECT ?, ?, ?, NOW()
@@ -153,14 +154,14 @@ async function checkEndedAuctions() {
               SELECT 1 FROM notifications
               WHERE id_auction = ? AND id_user = ? AND message LIKE '😢 %'
             )
-          `, [id_auctions, bidder.id_users, loserMessage, id_auctions, bidder.id_users]);
+          `, [id_auctions, o.id_users, msg, id_auctions, o.id_users]);
         }
 
-        console.log(`   📨 Notificaciones enviadas: 1 ganador + ${allBidders.length} perdedores`);
+        console.log(`   📨 Notificaciones: 1 ganador + ${others.length} perdedores`);
       } else {
-        // ❌ Sin pujas
-        console.log(`   🚫 Subasta cerrada SIN PUJAS`);
-        const noWinnerMessage = `😢 Nadie ofertó en la subasta #${id_auctions} (${title}).`;
+        // 🚫 Sin pujas
+        console.log(`   🚫 Subasta #${id_auctions} sin pujas.`);
+        const msg = `😢 Nadie ofertó en la subasta #${id_auctions} (${title}).`;
         await db.query(`
           INSERT INTO notifications (id_auction, id_user, message, created_at)
           SELECT ?, NULL, ?, NOW()
@@ -168,10 +169,10 @@ async function checkEndedAuctions() {
             SELECT 1 FROM notifications
             WHERE id_auction = ? AND message LIKE '😢 Nadie%'
           )
-        `, [id_auctions, noWinnerMessage, id_auctions]);
+        `, [id_auctions, msg, id_auctions]);
       }
 
-      console.log(`   ✅ Subasta #${id_auctions} procesada completamente\n`);
+      console.log(`   ✅ Subasta #${id_auctions} procesada correctamente.\n`);
     }
   } catch (err) {
     console.error("❌ Error en checkEndedAuctions:", err.message);
@@ -179,9 +180,6 @@ async function checkEndedAuctions() {
   }
 }
 
-/* ======================================================
-⚙️ CONFIGURACIÓN BASE
-====================================================== */
 app.use(express.json());
 app.use(cors({
   origin: [
