@@ -67,18 +67,32 @@ export default (io) => {
       // =====================================================
       // 🕓 Convertir hora local (del navegador) a UTC
       // =====================================================
-      const localStart = new Date(start_time); // viene del frontend (hora local)
+      if (!start_time || !end_time) {
+        return res.status(400).json({ error: "start_time y end_time son requeridos" });
+      }
+
+      // 🕒 Convertir fechas locales a UTC
+      const localStart = new Date(start_time);
       const localEnd = new Date(end_time);
 
-      // Ajustar +6 horas para Guatemala -> UTC
+      // Verificar que son válidas
+      if (isNaN(localStart) || isNaN(localEnd)) {
+        return res.status(400).json({ error: "Formato de fecha inválido" });
+      }
+
+      // Ajustar zona horaria: Guatemala UTC-6 → UTC
       const utcStart = new Date(localStart.getTime() + 6 * 60 * 60 * 1000);
       const utcEnd = new Date(localEnd.getTime() + 6 * 60 * 60 * 1000);
 
+      // 🧩 Guardar subasta con las fechas en UTC
       await db.query(
         `INSERT INTO auctions (title, brand, model, years, base_price, descriptions, start_time, end_time, status)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')`,
         [title, brand, model, years, base_price, descriptions, utcStart, utcEnd]
       );
+
+      console.log("✅ Subasta creada con:", { utcStart, utcEnd });
+
 
       res.status(201).json({ message: "✅ Subasta creada correctamente (guardada en UTC)" });
 
