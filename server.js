@@ -75,7 +75,7 @@ async function checkEndedAuctions() {
         end_time
       FROM auctions
       WHERE status = 'active'
-        AND end_time <= DATE_SUB(UTC_TIMESTAMP(), INTERVAL ${LOCAL_OFFSET_HOURS} HOUR)
+        AND end_time <= UTC_TIMESTAMP()
     `);
 
     if (!auctions.length) return;

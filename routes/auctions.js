@@ -41,45 +41,46 @@ export default (io) => {
   });
 
   // Crear nueva subasta y notificar a los demás
-  router.post("/", verifyToken, upload.single("image"), async (req, res) => {
-    const { title, brand, model, years, descriptions, base_price, start_time, end_time } = req.body;
-    const image = req.file ? req.file.buffer : null;
-    const id_users = req.user.id;
-    const id_flags = 1; // estado "active"
-
+  router.post("/", verifyToken, async (req, res) => {
     try {
-      const [result] = await db.query(
-        `
-        INSERT INTO auctions
-        (id_users, id_flags, title, brand, model, years, descriptions, base_price, image_data, start_time, end_time)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `,
-        [id_users, id_flags, title, brand, model, years, descriptions, base_price, image, start_time, end_time]
-      );
-
-      const newAuction = {
-        id_auctions: result.insertId,
+      const {
         title,
         brand,
         model,
         years,
-        descriptions,
+        description,
         base_price,
         start_time,
         end_time,
-        image_data: image ? `data:image/jpeg;base64,${image.toString("base64")}` : null,
-      };
+        image_data
+      } = req.body;
 
-      // Emitir evento a todos los sockets conectados
-      req.io.emit("newAuction", newAuction);
+      // =====================================================
+      // 🕓 Convertir hora local (del navegador) a UTC
+      // =====================================================
+      const localStartTime = new Date(start_time);
+      const localEndTime = new Date(end_time);
 
-      res.json({ message: "🚗 Subasta creada con éxito", auction: newAuction });
+      // Convertir a UTC sumando 6 horas (Guatemala UTC-6)
+      const utcStartTime = new Date(localStartTime.getTime() + 6 * 60 * 60 * 1000);
+      const utcEndTime = new Date(localEndTime.getTime() + 6 * 60 * 60 * 1000);
+
+      await db.query(
+        `
+        INSERT INTO auctions 
+          (title, brand, model, years, description, base_price, start_time, end_time, image_data, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
+        `,
+        [title, brand, model, years, description, base_price, utcStartTime, utcEndTime, image_data]
+      );
+
+      res.status(201).json({ message: "✅ Subasta creada correctamente (guardada en UTC)" });
+
     } catch (err) {
-      console.error("Error al crear subasta:", err);
-      res.status(500).json({ error: err.message });
+      console.error("❌ Error al crear la subasta:", err);
+      res.status(500).json({ message: "Error al crear la subasta" });
     }
   });
-
 
   // Obtener subasta por ID
   router.get("/:id", async (req, res) => {
