@@ -15,28 +15,37 @@ export default (io) => {
     });
 
   // Obtener todas las subastas
-  router.get("/", async (req, res) => {
+  router.get("/:id", async (req, res) => {
     try {
-      const [rows] = await db.query(`
-        SELECT a.id_auctions, a.title, a.brand, a.model, a.years, 
-               a.descriptions, a.base_price, a.start_time, a.end_time,
-               f.flagname, u.username, a.image_data
-          FROM auctions a
-          JOIN users u ON a.id_users = u.id_users
-          JOIN flags f ON a.id_flags = f.id_flags
-         ORDER BY a.start_time DESC
-      `);
+      const { id } = req.params;
 
-      const auctions = rows.map(row => ({
-        ...row,
-        image_data: row.image_data
-          ? `data:image/jpeg;base64,${row.image_data.toString("base64")}`
-          : null
-      }));
+      // Consulta subasta con sus pujas
+      const [auctionRows] = await db.query(
+        `SELECT * FROM auctions WHERE id_auctions = ?`,
+        [id]
+      );
 
-      res.json(auctions);
+      if (auctionRows.length === 0) {
+        return res.status(404).json({ message: "Subasta no encontrada" });
+      }
+
+      const auction = auctionRows[0];
+
+      const [bidRows] = await db.query(
+        `SELECT b.bid_amount, u.username
+        FROM bids b
+        JOIN users u ON b.id_users = u.id_users
+        WHERE b.id_auctions = ?
+        ORDER BY b.bid_amount DESC`,
+        [id]
+      );
+
+      auction.bids = bidRows;
+
+      res.json(auction);
     } catch (err) {
-      res.status(500).json({ error: err.message });
+      console.error("❌ Error al obtener subasta:", err);
+      res.status(500).json({ error: "Error al obtener subasta" });
     }
   });
 
@@ -58,17 +67,18 @@ export default (io) => {
       // =====================================================
       // 🕓 Convertir hora local (del navegador) a UTC
       // =====================================================
-      const localStartTime = new Date(start_time);
-      const localEndTime = new Date(end_time);
+      const localStart = new Date(start_time); // viene del frontend (hora local)
+      const localEnd = new Date(end_time);
 
-      // Guatemala es UTC-6 → sumamos 6 h para guardar en UTC
-      const utcStartTime = new Date(localStartTime.getTime() + 6 * 60 * 60 * 1000);
-      const utcEndTime = new Date(localEndTime.getTime() + 6 * 60 * 60 * 1000);
+      // Ajustar +6 horas para Guatemala -> UTC
+      const utcStart = new Date(localStart.getTime() + 6 * 60 * 60 * 1000);
+      const utcEnd = new Date(localEnd.getTime() + 6 * 60 * 60 * 1000);
 
-      await db.query(`
-        INSERT INTO auctions (title, brand, model, years, description, base_price, start_time, end_time, image_data, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
-      `, [title, brand, model, years, description, base_price, utcStartTime, utcEndTime, image_data]);
+      await db.query(
+        `INSERT INTO auctions (title, brand, model, years, base_price, descriptions, start_time, end_time, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')`,
+        [title, brand, model, years, base_price, descriptions, utcStart, utcEnd]
+      );
 
       res.status(201).json({ message: "✅ Subasta creada correctamente (guardada en UTC)" });
 
