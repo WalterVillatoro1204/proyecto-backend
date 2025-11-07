@@ -61,18 +61,14 @@ export default (io) => {
       const localStartTime = new Date(start_time);
       const localEndTime = new Date(end_time);
 
-      // Convertir a UTC sumando 6 horas (Guatemala UTC-6)
+      // Guatemala es UTC-6 → sumamos 6 h para guardar en UTC
       const utcStartTime = new Date(localStartTime.getTime() + 6 * 60 * 60 * 1000);
       const utcEndTime = new Date(localEndTime.getTime() + 6 * 60 * 60 * 1000);
 
-      await db.query(
-        `
-        INSERT INTO auctions 
-          (title, brand, model, years, description, base_price, start_time, end_time, image_data, status)
+      await db.query(`
+        INSERT INTO auctions (title, brand, model, years, description, base_price, start_time, end_time, image_data, status)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
-        `,
-        [title, brand, model, years, description, base_price, utcStartTime, utcEndTime, image_data]
-      );
+      `, [title, brand, model, years, description, base_price, utcStartTime, utcEndTime, image_data]);
 
       res.status(201).json({ message: "✅ Subasta creada correctamente (guardada en UTC)" });
 

@@ -74,7 +74,7 @@ async function checkEndedAuctions() {
         title,
         end_time
       FROM auctions
-      WHERE status = 'active'
+      WHERE status = 'active' AND end_time < UTC_TIMESTAMP()
         AND end_time <= UTC_TIMESTAMP()
     `);
 
