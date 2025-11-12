@@ -1,5 +1,5 @@
 // ==============================================
-//  ROUTES/AUCTIONS.JS - COMPLETO CORREGIDO
+//  ROUTES/AUCTIONS.JS - SIMPLIFICADO SIN FLAGS
 // ==============================================
 
 import express from "express";
@@ -9,18 +9,16 @@ import { verifyToken } from "./users.js";
 const router = express.Router();
 
 // ============================================================
-// 🟢 Obtener todas las subastas
+// 🟢 Obtener todas las subastas (SIMPLIFICADO)
 // ============================================================
 router.get("/", async (req, res) => {
   try {
     const [auctions] = await db.query(`
       SELECT 
         a.*, 
-        u.username AS owner_username, 
-        f.name AS flagname
+        u.username AS owner_username
       FROM auctions a
       JOIN users u ON a.id_users = u.id_users
-      JOIN flags f ON a.id_flags = f.id_flags
       ORDER BY a.id_auctions DESC
     `);
 
@@ -42,12 +40,10 @@ router.get("/:id", verifyToken, async (req, res) => {
       `
       SELECT 
         a.*, 
-        u.username AS owner_username, 
-        f.name AS flagname,
+        u.username AS owner_username,
         UNIX_TIMESTAMP(a.end_time) as end_time_unix
       FROM auctions a
       JOIN users u ON a.id_users = u.id_users
-      JOIN flags f ON a.id_flags = f.id_flags
       WHERE a.id_auctions = ?
       `,
       [id]
