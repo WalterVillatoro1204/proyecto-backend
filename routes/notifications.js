@@ -1,5 +1,5 @@
 // ==============================================
-//  ROUTES/NOTIFICATIONS.JS - COMPLETO
+//  ROUTES/NOTIFICATIONS.JS - CORREGIDO Y OPTIMIZADO
 // ==============================================
 
 import express from "express";
@@ -7,6 +7,18 @@ import { db } from "../db.js";
 import { verifyToken } from "./users.js";
 
 const router = express.Router();
+
+// ============================================================
+// 🕒 Nueva ruta: sincronizar hora del servidor
+// ============================================================
+router.get("/time", (req, res) => {
+  try {
+    res.json({ serverTime: new Date().toISOString() });
+  } catch (err) {
+    console.error("❌ Error al obtener hora del servidor:", err);
+    res.status(500).json({ message: "Error al obtener hora del servidor" });
+  }
+});
 
 // ============================================================
 // 📩 Obtener notificaciones del usuario autenticado
@@ -27,9 +39,8 @@ router.get("/", verifyToken, async (req, res) => {
       LIMIT 50`,
       [req.user.id]
     );
-    
+
     console.log(`📬 ${rows.length} notificaciones para usuario ${req.user.id}`);
-    
     res.json(rows);
   } catch (err) {
     console.error("❌ Error al obtener notificaciones:", err);
@@ -43,12 +54,10 @@ router.get("/", verifyToken, async (req, res) => {
 router.put("/:id/read", verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
-    
     await db.query(
       `UPDATE notifications SET is_read = 1 WHERE id_notification = ? AND id_user = ?`,
       [id, req.user.id]
     );
-    
     res.json({ success: true, message: "Notificación marcada como leída" });
   } catch (err) {
     console.error("❌ Error marcando notificación:", err);
@@ -57,17 +66,15 @@ router.put("/:id/read", verifyToken, async (req, res) => {
 });
 
 // ============================================================
-// 🗑️ Eliminar notificación
+// 🗑️ Eliminar notificación individual
 // ============================================================
 router.delete("/:id", verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
-    
     await db.query(
       `DELETE FROM notifications WHERE id_notification = ? AND id_user = ?`,
       [id, req.user.id]
     );
-    
     res.json({ success: true, message: "Notificación eliminada" });
   } catch (err) {
     console.error("❌ Error eliminando notificación:", err);
@@ -84,7 +91,6 @@ router.put("/mark-all-read", verifyToken, async (req, res) => {
       `UPDATE notifications SET is_read = 1 WHERE id_user = ? AND is_read = 0`,
       [req.user.id]
     );
-    
     res.json({ success: true, message: "Todas las notificaciones marcadas como leídas" });
   } catch (err) {
     console.error("❌ Error marcando todas como leídas:", err);
@@ -93,7 +99,7 @@ router.put("/mark-all-read", verifyToken, async (req, res) => {
 });
 
 // ============================================================
-// 🗑️ Eliminar todas las notificaciones leídas
+// 🧹 Eliminar todas las notificaciones leídas
 // ============================================================
 router.delete("/clear-read", verifyToken, async (req, res) => {
   try {
@@ -101,7 +107,6 @@ router.delete("/clear-read", verifyToken, async (req, res) => {
       `DELETE FROM notifications WHERE id_user = ? AND is_read = 1`,
       [req.user.id]
     );
-    
     res.json({ success: true, message: "Notificaciones leídas eliminadas" });
   } catch (err) {
     console.error("❌ Error eliminando notificaciones:", err);
