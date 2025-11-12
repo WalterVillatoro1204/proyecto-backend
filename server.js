@@ -127,7 +127,7 @@ app.use("/api/bids", bidRoutes);
 app.use("/api/notifications", notificationRoutes);
 
 // ✅ Ruta para sincronizar tiempo
-app.get("/api/time", (req, res) => {
+app.get("/time", (req, res) => {
   res.json({ 
     serverTime: Date.now(),
     serverTimeISO: new Date().toISOString()
