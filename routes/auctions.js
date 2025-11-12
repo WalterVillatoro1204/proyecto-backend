@@ -1,7 +1,4 @@
-// ==============================================
-//  ROUTES/AUCTIONS.JS - CORREGIDO Y COMPLETO
-// ==============================================
-
+//auctions.js
 import express from "express";
 import { db } from "../db.js";
 import { verifyToken } from "./users.js";
@@ -16,9 +13,11 @@ router.get("/", async (req, res) => {
     const [auctions] = await db.query(`
       SELECT 
         a.*, 
-        u.username AS owner_username
+        u.username AS owner_username, 
+        f.name AS flagname
       FROM auctions a
       JOIN users u ON a.id_users = u.id_users
+      JOIN flags f ON a.id_flags = f.id_flags
       ORDER BY a.id_auctions DESC
     `);
 
@@ -40,10 +39,11 @@ router.get("/:id", verifyToken, async (req, res) => {
       `
       SELECT 
         a.*, 
-        u.username AS owner_username,
-        UNIX_TIMESTAMP(a.end_time) as end_time_unix
+        u.username AS owner_username, 
+        f.name AS flagname
       FROM auctions a
       JOIN users u ON a.id_users = u.id_users
+      JOIN flags f ON a.id_flags = f.id_flags
       WHERE a.id_auctions = ?
       `,
       [id]
@@ -78,7 +78,7 @@ router.get("/:id", verifyToken, async (req, res) => {
 });
 
 // ============================================================
-// 🟢 Crear una nueva subasta
+// 🟢 Crear una nueva subasta (ajuste horario UTC)
 // ============================================================
 router.post("/", verifyToken, async (req, res) => {
   try {
@@ -111,25 +111,22 @@ router.post("/", verifyToken, async (req, res) => {
     }
 
     // Validar formato de fechas
-    const startDate = new Date(start_time);
-    const endDate = new Date(end_time);
+    const localStart = new Date(start_time);
+    const localEnd = new Date(end_time);
 
-    if (isNaN(startDate) || isNaN(endDate)) {
+    if (isNaN(localStart) || isNaN(localEnd)) {
       return res.status(400).json({ error: "Formato de fecha inválido" });
     }
 
-    // Validar que end_time sea mayor que start_time
-    if (endDate <= startDate) {
-      return res.status(400).json({ 
-        error: "La fecha de finalización debe ser posterior a la fecha de inicio" 
-      });
-    }
+    // Ajustar +6h para guardar en UTC (Guatemala = UTC-6)
+    const utcStart = new Date(localStart.getTime() + 6 * 60 * 60 * 1000);
+    const utcEnd = new Date(localEnd.getTime() + 6 * 60 * 60 * 1000);
 
-    const id_users = req.user.id;
-    const id_flags = 1; // por defecto "active"
+    const id_users = req.user.id; // viene del token
+    const id_flags = 1; // por defecto “active”
 
-    // Guardar subasta (sin conversión manual de fechas)
-    const [result] = await db.query(
+    // 🧩 Guardar subasta
+    await db.query(
       `
       INSERT INTO auctions 
       (id_users, id_flags, title, brand, model, years, base_price, descriptions, start_time, end_time, image_data, status)
@@ -144,25 +141,20 @@ router.post("/", verifyToken, async (req, res) => {
         years,
         base_price,
         descriptions,
-        start_time,
-        end_time,
+        utcStart,
+        utcEnd,
         image_data,
       ]
     );
 
-    console.log("✅ Subasta creada:", {
-      id: result.insertId,
-      title,
-      start_time,
-      end_time,
+    console.log("✅ Subasta creada con fechas UTC:", {
+      utcStart,
+      utcEnd,
     });
 
-    res.status(201).json({ 
-      message: "✅ Subasta creada correctamente",
-      id_auctions: result.insertId,
-      start_time,
-      end_time
-    });
+    res
+      .status(201)
+      .json({ message: "✅ Subasta creada correctamente (guardada en UTC)" });
   } catch (err) {
     console.error("❌ Error al crear la subasta:", err);
     res.status(500).json({ error: "Error al crear la subasta" });
@@ -170,28 +162,12 @@ router.post("/", verifyToken, async (req, res) => {
 });
 
 // ============================================================
-// 🟢 Actualizar estado de subasta
+// 🟢 Actualizar estado de subasta (finalizar o modificar)
 // ============================================================
 router.put("/:id/status", verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
     const { status } = req.body;
-
-    // Validar que el usuario sea el dueño de la subasta
-    const [auction] = await db.query(
-      "SELECT id_users FROM auctions WHERE id_auctions = ?",
-      [id]
-    );
-
-    if (auction.length === 0) {
-      return res.status(404).json({ error: "Subasta no encontrada" });
-    }
-
-    if (auction[0].id_users !== req.user.id) {
-      return res.status(403).json({ 
-        error: "No tienes permiso para modificar esta subasta" 
-      });
-    }
 
     await db.query("UPDATE auctions SET status = ? WHERE id_auctions = ?", [
       status,
@@ -202,50 +178,6 @@ router.put("/:id/status", verifyToken, async (req, res) => {
   } catch (err) {
     console.error("❌ Error al actualizar estado:", err);
     res.status(500).json({ error: "Error al actualizar estado" });
-  }
-});
-
-// ============================================================
-// 🟢 Eliminar una subasta (solo si no tiene pujas)
-// ============================================================
-router.delete("/:id", verifyToken, async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    // Verificar que el usuario sea el dueño
-    const [auction] = await db.query(
-      "SELECT id_users FROM auctions WHERE id_auctions = ?",
-      [id]
-    );
-
-    if (auction.length === 0) {
-      return res.status(404).json({ error: "Subasta no encontrada" });
-    }
-
-    if (auction[0].id_users !== req.user.id) {
-      return res.status(403).json({ 
-        error: "No tienes permiso para eliminar esta subasta" 
-      });
-    }
-
-    // Verificar que no tenga pujas
-    const [bids] = await db.query(
-      "SELECT COUNT(*) as count FROM bids WHERE id_auctions = ?",
-      [id]
-    );
-
-    if (bids[0].count > 0) {
-      return res.status(400).json({ 
-        error: "No se puede eliminar una subasta que ya tiene pujas" 
-      });
-    }
-
-    await db.query("DELETE FROM auctions WHERE id_auctions = ?", [id]);
-
-    res.json({ message: "Subasta eliminada correctamente" });
-  } catch (err) {
-    console.error("❌ Error al eliminar subasta:", err);
-    res.status(500).json({ error: "Error al eliminar subasta" });
   }
 });
 
