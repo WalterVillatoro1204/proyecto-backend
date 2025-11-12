@@ -122,17 +122,16 @@ io.on("connection", (socket) => {
 //  RUTAS HTTP
 // ======================
 app.use("/api/users", userRoutes);
-app.use("/api/auctions", auctionRoutes(io));
+app.use("/api/auctions", auctionRoutes);
 app.use("/api/bids", bidRoutes);
 app.use("/api/notifications", notificationRoutes);
 
-// ✅ NUEVA RUTA PARA SINCRONIZAR HORA DEL SERVIDOR
+// ✅ Ruta para sincronizar tiempo
 app.get("/api/time", (req, res) => {
-  res.json({ serverTime: new Date().toISOString() });
-});
-
-app.get("/time", (req, res) => {
-  res.json({ serverTime: new Date().toISOString(), path: "/time" });
+  res.json({ 
+    serverTime: Date.now(),
+    serverTimeISO: new Date().toISOString()
+  });
 });
 // ======================
 //  CRON JOB - Cierre de subastas y notificaciones

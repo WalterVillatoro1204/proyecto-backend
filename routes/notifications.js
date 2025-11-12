@@ -9,18 +9,6 @@ import { verifyToken } from "./users.js";
 const router = express.Router();
 
 // ============================================================
-// 🕒 Nueva ruta: sincronizar hora del servidor
-// ============================================================
-router.get("/time", (req, res) => {
-  try {
-    res.json({ serverTime: new Date().toISOString() });
-  } catch (err) {
-    console.error("❌ Error al obtener hora del servidor:", err);
-    res.status(500).json({ message: "Error al obtener hora del servidor" });
-  }
-});
-
-// ============================================================
 // 📩 Obtener notificaciones del usuario autenticado
 // ============================================================
 router.get("/", verifyToken, async (req, res) => {
