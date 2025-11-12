@@ -1,5 +1,5 @@
 // ==============================================
-//  ROUTES/AUCTIONS.JS - SIMPLIFICADO SIN FLAGS
+//  ROUTES/AUCTIONS.JS - CORREGIDO Y COMPLETO
 // ==============================================
 
 import express from "express";
@@ -9,7 +9,7 @@ import { verifyToken } from "./users.js";
 const router = express.Router();
 
 // ============================================================
-// 🟢 Obtener todas las subastas (SIMPLIFICADO)
+// 🟢 Obtener todas las subastas
 // ============================================================
 router.get("/", async (req, res) => {
   try {
