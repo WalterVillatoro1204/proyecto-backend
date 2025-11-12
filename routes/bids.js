@@ -1,12 +1,15 @@
-// 📁 routes/bids.js
+// ==============================================
+//  ROUTES/BIDS.JS - COMPLETO
+// ==============================================
+
 import express from "express";
 import { db } from "../db.js";
-import { verifyToken } from "./users.js"; // ✅ Middleware para validar JWT
+import { verifyToken } from "./users.js";
 
 const router = express.Router();
 
 // ============================================================
-// 🟢 Crear una nueva puja (validación segura y sincronizada con el socket)
+// 🟢 Crear una nueva puja
 // ============================================================
 router.post("/", verifyToken, async (req, res) => {
   const { id_auctions, bid_amount } = req.body;
@@ -108,7 +111,7 @@ router.get("/history", verifyToken, async (req, res) => {
       [userId]
     );
 
-    // ✅ CLAVE: Convertir image_data (Buffer) a base64
+    // ✅ Convertir image_data (Buffer) a base64
     const auctionsWithImages = rows.map((row) => {
       let imageBase64 = null;
 
@@ -116,10 +119,8 @@ router.get("/history", verifyToken, async (req, res) => {
         if (Buffer.isBuffer(row.image_data)) {
           imageBase64 = `data:image/jpeg;base64,${row.image_data.toString("base64")}`;
         } else if (row.image_data.data) {
-          // caso: { type: 'Buffer', data: [...] }
           imageBase64 = `data:image/jpeg;base64,${Buffer.from(row.image_data.data).toString("base64")}`;
         } else if (typeof row.image_data === "string") {
-          // ya viene codificada
           imageBase64 = row.image_data;
         }
       }
@@ -136,6 +137,35 @@ router.get("/history", verifyToken, async (req, res) => {
   } catch (err) {
     console.error("❌ Error al obtener historial:", err.message);
     return res.status(500).json({ message: "Error al obtener historial de subastas" });
+  }
+});
+
+// ============================================================
+// 📜 Obtener todas las pujas de una subasta específica
+// ============================================================
+router.get("/auction/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const [bids] = await db.query(
+      `
+      SELECT 
+        b.id_bids,
+        b.bid_amount,
+        b.bid_time,
+        u.username
+      FROM bids b
+      JOIN users u ON b.id_users = u.id_users
+      WHERE b.id_auctions = ?
+      ORDER BY b.bid_amount DESC, b.bid_time ASC
+      `,
+      [id]
+    );
+
+    return res.status(200).json(bids);
+  } catch (err) {
+    console.error("❌ Error al obtener pujas:", err.message);
+    return res.status(500).json({ message: "Error al obtener pujas" });
   }
 });
 

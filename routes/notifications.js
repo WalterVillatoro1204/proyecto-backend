@@ -1,13 +1,18 @@
+// ==============================================
+//  ROUTES/NOTIFICATIONS.JS - COMPLETO
+// ==============================================
+
 import express from "express";
 import { db } from "../db.js";
 import { verifyToken } from "./users.js";
 
 const router = express.Router();
 
+// ============================================================
 // 📩 Obtener notificaciones del usuario autenticado
+// ============================================================
 router.get("/", verifyToken, async (req, res) => {
   try {
-    // ✅ Verifica si tu columna es id_user o id_users
     const [rows] = await db.query(
       `SELECT 
         id_notification, 
@@ -32,7 +37,9 @@ router.get("/", verifyToken, async (req, res) => {
   }
 });
 
+// ============================================================
 // 📌 Marcar notificación como leída
+// ============================================================
 router.put("/:id/read", verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
@@ -49,7 +56,9 @@ router.put("/:id/read", verifyToken, async (req, res) => {
   }
 });
 
+// ============================================================
 // 🗑️ Eliminar notificación
+// ============================================================
 router.delete("/:id", verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
@@ -63,6 +72,40 @@ router.delete("/:id", verifyToken, async (req, res) => {
   } catch (err) {
     console.error("❌ Error eliminando notificación:", err);
     res.status(500).json({ message: "Error al eliminar notificación" });
+  }
+});
+
+// ============================================================
+// 🔔 Marcar todas las notificaciones como leídas
+// ============================================================
+router.put("/mark-all-read", verifyToken, async (req, res) => {
+  try {
+    await db.query(
+      `UPDATE notifications SET is_read = 1 WHERE id_user = ? AND is_read = 0`,
+      [req.user.id]
+    );
+    
+    res.json({ success: true, message: "Todas las notificaciones marcadas como leídas" });
+  } catch (err) {
+    console.error("❌ Error marcando todas como leídas:", err);
+    res.status(500).json({ message: "Error al actualizar notificaciones" });
+  }
+});
+
+// ============================================================
+// 🗑️ Eliminar todas las notificaciones leídas
+// ============================================================
+router.delete("/clear-read", verifyToken, async (req, res) => {
+  try {
+    await db.query(
+      `DELETE FROM notifications WHERE id_user = ? AND is_read = 1`,
+      [req.user.id]
+    );
+    
+    res.json({ success: true, message: "Notificaciones leídas eliminadas" });
+  } catch (err) {
+    console.error("❌ Error eliminando notificaciones:", err);
+    res.status(500).json({ message: "Error al eliminar notificaciones" });
   }
 });
 
