@@ -263,7 +263,7 @@ cron.schedule("* * * * * *", async () => {
   }
 });
 
-const PORT = process.env.PORT || 8080;
+const PORT = process.env.PORT || 8081;
 server.listen(PORT, () => {
   console.log(`🚀 Servidor escuchando en el puerto ${PORT}`);
   console.log(`📡 WebSocket habilitado`);
