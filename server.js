@@ -131,6 +131,9 @@ app.get("/api/time", (req, res) => {
   res.json({ serverTime: new Date().toISOString() });
 });
 
+app.get("/time", (req, res) => {
+  res.json({ serverTime: new Date().toISOString(), path: "/time" });
+});
 // ======================
 //  CRON JOB - Cierre de subastas y notificaciones
 // ======================
